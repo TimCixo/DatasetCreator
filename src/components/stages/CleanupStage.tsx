@@ -68,6 +68,8 @@ export const CleanupStage = () => {
   const isSpacePressedRef = useRef(false);
   const sessionsRef = useRef<Record<string, CanvasState>>({});
   const strokeDraftRef = useRef<ImageData | null>(null);
+  const canvasSizeRef = useRef({ width: 0, height: 0 });
+  const openingImageIdRef = useRef<string | null>(null);
 
   const [selectedImageId, setSelectedImageId] = useState<string | null>(null);
   const [tool, setTool] = useState<'brush' | 'eraser' | 'eyedropper'>('brush');
@@ -90,7 +92,6 @@ export const CleanupStage = () => {
   });
   const [persistedImageIds, setPersistedImageIds] = useState<Set<string>>(new Set());
   const [sessionVersion, setSessionVersion] = useState(0);
-  const [openingImageId, setOpeningImageId] = useState<string | null>(null);
 
   const items = useMemo<CleanupImage[]>(() => {
     if (datasetItems.length > 0) {
@@ -121,17 +122,8 @@ export const CleanupStage = () => {
       }));
   }, [cleanupStageState, datasetItems, sourceImages]);
 
-  const selectedItem = useMemo(
-    () => items.find((item) => item.id === selectedImageId) ?? null,
-    [items, selectedImageId]
-  );
-
-  const currentSession = useMemo(() => {
-    if (!selectedImageId) {
-      return null;
-    }
-    return sessionsRef.current[selectedImageId] ?? null;
-  }, [selectedImageId, sessionVersion]);
+  const selectedItem = items.find((item) => item.id === selectedImageId) ?? null;
+  const currentSession = selectedImageId ? sessionsRef.current[selectedImageId] ?? null : null;
 
   const nearbyItems = useMemo(() => {
     if (!selectedImageId) {
@@ -169,8 +161,14 @@ export const CleanupStage = () => {
       return;
     }
 
-    canvas.width = imageData.width;
-    canvas.height = imageData.height;
+    if (
+      canvasSizeRef.current.width !== imageData.width ||
+      canvasSizeRef.current.height !== imageData.height
+    ) {
+      canvas.width = imageData.width;
+      canvas.height = imageData.height;
+      canvasSizeRef.current = { width: imageData.width, height: imageData.height };
+    }
 
     const ctx = canvas.getContext('2d');
     if (!ctx) {
@@ -189,6 +187,22 @@ export const CleanupStage = () => {
     sessionsRef.current[imageId] = nextState;
     setSessionVersion((version) => version + 1);
   }, []);
+
+  const renderSessionToCanvas = useCallback(
+    (imageId: string, reason: string) => {
+      const session = sessionsRef.current[imageId];
+      if (!session) {
+        return;
+      }
+
+      if (import.meta.env.DEV) {
+        console.log(`[cleanup] render session: ${imageId} (${reason})`);
+      }
+
+      renderImageData(getCurrentImageData(session));
+    },
+    [renderImageData]
+  );
 
   const persistImageData = useCallback(
     async (item: CleanupImage, imageData: ImageData) => {
@@ -243,7 +257,7 @@ export const CleanupStage = () => {
         return;
       }
 
-      setOpeningImageId(imageId);
+      openingImageIdRef.current = imageId;
 
       try {
         let session = sessionsRef.current[imageId];
@@ -259,6 +273,7 @@ export const CleanupStage = () => {
         setBrushSettings(session.currentBrushSettings);
         strokeDraftRef.current = null;
         fitImageToWorkspace(session.baseImage.width, session.baseImage.height);
+        renderImageData(getCurrentImageData(session));
 
         if (import.meta.env.DEV) {
           console.log(`[cleanup] editor open image: ${imageId}`);
@@ -268,10 +283,12 @@ export const CleanupStage = () => {
         console.error('Failed to open cleanup editor:', error);
         addNotification('error', 'Failed to open image editor');
       } finally {
-        setOpeningImageId((current) => (current === imageId ? null : current));
+        if (openingImageIdRef.current === imageId) {
+          openingImageIdRef.current = null;
+        }
       }
     },
-    [addNotification, fitImageToWorkspace, items, selectedImageId]
+    [addNotification, fitImageToWorkspace, items, renderImageData, selectedImageId]
   );
 
   useEffect(() => {
@@ -314,12 +331,19 @@ export const CleanupStage = () => {
   }, []);
 
   useEffect(() => {
-    if (!selectedItem || !currentSession || openingImageId === selectedItem.id) {
+    if (!selectedImageId || !currentSession) {
       return;
     }
 
-    renderImageData(getCurrentImageData(currentSession));
-  }, [currentSession, openingImageId, renderImageData, selectedItem]);
+    if (openingImageIdRef.current === selectedImageId) {
+      if (import.meta.env.DEV) {
+        console.log(`[cleanup] effect skipped while opening: ${selectedImageId}`);
+      }
+      return;
+    }
+
+    renderSessionToCanvas(selectedImageId, 'session-version-sync');
+  }, [currentSession, renderSessionToCanvas, selectedImageId, sessionVersion]);
 
   const getCanvasCoordinates = useCallback(
     (clientX: number, clientY: number): [number, number] => {
@@ -576,6 +600,7 @@ export const CleanupStage = () => {
               <button
                 onClick={() => {
                   setSelectedImageId(null);
+                  strokeDraftRef.current = null;
                   if (import.meta.env.DEV) {
                     console.log('[cleanup] editor close');
                   }

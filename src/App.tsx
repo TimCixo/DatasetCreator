@@ -8,6 +8,8 @@ import { CleanupStage } from './components/stages/CleanupStage'
 import { CropStage } from './components/stages/CropStage'
 import { AugmentationStage } from './components/stages/AugmentationStage'
 import { FinalReviewStage } from './components/stages/FinalReviewStage'
+import { TaggingStage } from './components/stages/TaggingStage'
+import { ExportStage } from './components/stages/ExportStage'
 import './App.css'
 
 function App() {
@@ -108,15 +110,8 @@ function App() {
             {currentStage === 'crop' && <CropStage />}
             {currentStage === 'augment' && <AugmentationStage />}
             {currentStage === 'review' && <FinalReviewStage />}
-            {!['import', 'select', 'clean', 'crop', 'augment', 'review'].includes(currentStage) && (
-              <div className="h-96 flex items-center justify-center rounded-lg border-2 border-dashed border-border bg-secondary/50">
-                <p className="text-muted-foreground text-center">
-                  Stage: <span className="font-semibold">{STAGE_LABELS[currentStage]}</span>
-                  <br />
-                  Component coming next...
-                </p>
-              </div>
-            )}
+            {currentStage === 'tagging' && <TaggingStage />}
+            {currentStage === 'export' && <ExportStage />}
           </div>
         </div>
       </main>

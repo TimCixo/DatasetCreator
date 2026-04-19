@@ -85,6 +85,8 @@ The file picker must support:
 It is a bug if the app only imports **one file** when the user selects multiple files or a folder.
 This must be fixed.
 
+**✅ FIXED:** Drag-and-drop import, multiple file/folder import, and navigation to next stage are now working.
+
 #### Navigation requirement
 
 After at least one valid image has been imported, the user must be able to proceed to the **next stage**.

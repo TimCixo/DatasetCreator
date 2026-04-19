@@ -1,12 +1,16 @@
-import { useEffect } from 'react'
+import { useEffect, useMemo } from 'react'
 import { useProjectStore } from './stores/useProjectStore'
 import { useUIStore } from './stores/useUIStore'
 import { STAGE_LABELS, STAGES } from './lib/constants'
+import { ImportStage } from './components/stages/ImportStage'
+import { SimilarityReviewStage } from './components/stages/SimilarityReviewStage'
 import './App.css'
 
 function App() {
-  const { currentStage, setCurrentStage, initializeProject } = useProjectStore()
+  const { currentStage, setCurrentStage, initializeProject, getSourceImages } = useProjectStore()
   const { darkMode, setDarkMode } = useUIStore()
+  
+  const sourceImages = useMemo(() => getSourceImages(), [getSourceImages])
 
   useEffect(() => {
     // Initialize project on first load
@@ -28,7 +32,11 @@ function App() {
   const currentStageIndex = STAGES.indexOf(currentStage as any)
 
   const goToStage = (stageName: string) => {
-    setCurrentStage(stageName as any)
+    const targetIndex = STAGES.indexOf(stageName as any)
+    // Allow going back, only allow forward if images are present for next stage
+    if (targetIndex <= currentStageIndex || (targetIndex === 1 && sourceImages.length > 0)) {
+      setCurrentStage(stageName as any)
+    }
   }
 
   return (
@@ -41,31 +49,34 @@ function App() {
         </div>
 
         <nav className="space-y-2">
-          {STAGES.map((stage, index) => (
-            <button
-              key={stage}
-              onClick={() => goToStage(stage)}
-              className={`
-                w-full text-left px-4 py-2 rounded-md text-sm font-medium
-                transition-colors duration-200
-                ${
-                  stage === currentStage
-                    ? 'bg-primary text-primary-foreground'
-                    : 'hover:bg-secondary text-foreground'
-                }
-                ${index > currentStageIndex ? 'opacity-50 cursor-not-allowed' : ''}
-              `}
-              disabled={index > currentStageIndex}
-            >
-              <span className="flex items-center gap-2">
-                <span className="text-xs w-5 h-5 rounded-full border border-current flex items-center justify-center">
-                  {index + 1}
+          {STAGES.map((stage, index) => {
+            const isAccessible = index <= currentStageIndex || (index === 1 && sourceImages.length > 0)
+            return (
+              <button
+                key={stage}
+                onClick={() => goToStage(stage)}
+                className={`
+                  w-full text-left px-4 py-2 rounded-md text-sm font-medium
+                  transition-colors duration-200
+                  ${
+                    stage === currentStage
+                      ? 'bg-primary text-primary-foreground'
+                      : 'hover:bg-secondary text-foreground'
+                  }
+                  ${!isAccessible ? 'opacity-50 cursor-not-allowed' : ''}
+                `}
+                disabled={!isAccessible}
+              >
+                <span className="flex items-center gap-2">
+                  <span className="text-xs w-5 h-5 rounded-full border border-current flex items-center justify-center">
+                    {index + 1}
+                  </span>
+                  {STAGE_LABELS[stage]}
                 </span>
-                {STAGE_LABELS[stage]}
-              </span>
-            </button>
-          ))}
-        </nav>
+              </button>
+            )
+          })}
+        
       </aside>
 
       {/* Main Content */}
@@ -87,13 +98,17 @@ function App() {
         {/* Stage Content */}
         <div className="flex-1 overflow-auto">
           <div className="p-6">
-            <div className="h-96 flex items-center justify-center rounded-lg border-2 border-dashed border-border bg-secondary/50">
-              <p className="text-muted-foreground text-center">
-                Stage: <span className="font-semibold">{STAGE_LABELS[currentStage]}</span>
-                <br />
-                Components coming next...
-              </p>
-            </div>
+            {currentStage === 'import' && <ImportStage />}
+            {currentStage === 'select' && <SimilarityReviewStage />}
+            {currentStage !== 'import' && currentStage !== 'select' && (
+              <div className="h-96 flex items-center justify-center rounded-lg border-2 border-dashed border-border bg-secondary/50">
+                <p className="text-muted-foreground text-center">
+                  Stage: <span className="font-semibold">{STAGE_LABELS[currentStage]}</span>
+                  <br />
+                  Component coming next...
+                </p>
+              </div>
+            )}
           </div>
         </div>
       </main>

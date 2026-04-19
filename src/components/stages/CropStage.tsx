@@ -1,4 +1,4 @@
-import { useState, useRef, useEffect, useCallback } from 'react';
+import { useState, useRef, useEffect } from 'react';
 import { useProjectStore } from '../../stores/useProjectStore';
 import { useUIStore } from '../../stores/useUIStore';
 import { ASPECT_RATIOS, ASPECT_RATIO_LABELS } from '../../lib/constants';
@@ -7,8 +7,6 @@ import {
   createCenteredCropFrame,
   moveCropFrame,
   resizeCropFrameFromHandle,
-  validateCropFrame,
-  checkCropOverlap,
 } from '../../services/crop/cropService';
 import { createDatasetItem, CropFrame, AspectRatio } from '../../types';
 import { AlertCircle, Plus, Trash2 } from 'lucide-react';
@@ -20,7 +18,7 @@ interface CropState {
 }
 
 export const CropStage = () => {
-  const { getSourceImages, addDatasetItem, getDatasetItems } = useProjectStore();
+  const { getSourceImages, addDatasetItem } = useProjectStore();
   const { addNotification } = useUIStore();
 
   const canvasRef = useRef<HTMLCanvasElement>(null);
@@ -38,7 +36,7 @@ export const CropStage = () => {
   const [dragStart, setDragStart] = useState({ x: 0, y: 0 });
 
   const sourceImages = getSourceImages();
-  const existingItems = getDatasetItems(false);
+
 
   if (sourceImages.length === 0) {
     return (

@@ -3,17 +3,17 @@ import { useProjectStore } from '../../stores/useProjectStore';
 import { useUIStore } from '../../stores/useUIStore';
 import { computeDistanceMatrix, performClustering } from '../../services/similarity/similarityService';
 import { ASPECT_RATIOS, ASPECT_RATIO_LABELS } from '../../lib/constants';
-import { AlertCircle, ChevronDown, Trash2 } from 'lucide-react';
+import { AlertCircle, Trash2 } from 'lucide-react';
 
 export const FinalReviewStage = () => {
-  const { getDatasetItems, softDeleteDatasetItem, removeSourceImage } = useProjectStore();
+  const { getDatasetItems, softDeleteDatasetItem } = useProjectStore();
   const { addNotification } = useUIStore();
 
   const [selectedAspectRatios, setSelectedAspectRatios] = useState<Set<string>>(new Set(ASPECT_RATIOS));
   const [similarityThreshold, setSimilarityThreshold] = useState(0.7);
   const [clusters, setClusters] = useState<any[]>([]);
   const [isComputing, setIsComputing] = useState(false);
-  const [expandedClusterId, setExpandedClusterId] = useState<string | null>(null);
+
 
   const items = getDatasetItems(false);
   const filteredItems = useMemo(
@@ -75,11 +75,6 @@ export const FinalReviewStage = () => {
   const handleDeleteItem = (id: string) => {
     softDeleteDatasetItem(id);
     addNotification('info', 'Item marked for deletion');
-  };
-
-  const handlePermanentDelete = (id: string) => {
-    removeSourceImage(id);
-    addNotification('info', 'Item deleted');
   };
 
   if (items.length === 0) {

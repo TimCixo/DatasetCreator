@@ -2,13 +2,11 @@ import { useState, useMemo } from 'react';
 import { useProjectStore } from '../../stores/useProjectStore';
 import { useUIStore } from '../../stores/useUIStore';
 import {
-  generateRotationVariants,
-  generateAugmentationConfigs,
   applyAugmentation,
-  generateSeedFromImage,
+  generateAugmentationConfigs,
 } from '../../services/augmentation/augmentationService';
 import { createDatasetItem, AugmentationConfig } from '../../types';
-import { AlertCircle, ChevronDown } from 'lucide-react';
+import { AlertCircle } from 'lucide-react';
 
 export const AugmentationStage = () => {
   const { getDatasetItems, addDatasetItem } = useProjectStore();
@@ -18,9 +16,10 @@ export const AugmentationStage = () => {
   const [augmentationType, setAugmentationType] = useState<AugmentationConfig['type']>('flip_h');
   const [rotationDegrees, setRotationDegrees] = useState(15);
   const [rotationVariants, setRotationVariants] = useState(3);
-  const [colorVariants, setColorVariants] = useState(3);
+  const [colorVariants] = useState(3);
+
   const [isProcessing, setIsProcessing] = useState(false);
-  const [expandedImageId, setExpandedImageId] = useState<string | null>(null);
+
 
   const items = getDatasetItems(false);
 
@@ -34,11 +33,7 @@ export const AugmentationStage = () => {
       rotationSeed: 12345,
     };
 
-    return generateAugmentationConfigs(
-      baseConfig,
-      Array.from(selectedImages),
-      augmentationType
-    );
+    return generateAugmentationConfigs(baseConfig);
   }, [selectedImages, augmentationType, rotationDegrees, rotationVariants]);
 
   const toggleImageSelection = (id: string) => {
@@ -82,11 +77,7 @@ export const AugmentationStage = () => {
         const item = items.find((i) => i.id === imageId);
         if (!item) continue;
 
-        const configs = generateAugmentationConfigs(
-          baseConfig,
-          [imageId],
-          augmentationType
-        );
+        const configs = generateAugmentationConfigs(baseConfig);
 
         for (const config of configs) {
           try {

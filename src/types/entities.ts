@@ -193,7 +193,16 @@ export const createProject = (name: string): ProjectState => ({
   datasetItems: {},
   cleanupOverlays: {},
   currentStage: 'import',
-  stageState: {},
+  stageState: {
+    import: {},
+    select: {},
+    clean: {},
+    crop: {},
+    augment: {},
+    review: {},
+    tagging: {},
+    export: {},
+  },
   taggingConfig: {
     datasetKeyword: 'dataset',
     threshold: 0.5,

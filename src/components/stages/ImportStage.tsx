@@ -4,14 +4,14 @@ import { useUIStore } from '../../stores/useUIStore';
 import { createSourceImage } from '../../types';
 import { getImageDimensions, createThumbnail } from '../../services/image/imageProcessor';
 import { generateEmbedding, generateImageHash } from '../../services/image/embeddingService';
-import { formatFileSize } from '../../lib/utils';
+
 import { Upload, Trash2 } from 'lucide-react';
 
 const SUPPORTED_FORMATS = ['image/jpeg', 'image/png', 'image/webp', 'image/gif'];
 
 export const ImportStage = () => {
   const {
-    sourceImages,
+
     addSourceImage,
     removeSourceImage,
     getSourceImages,
@@ -45,7 +45,7 @@ export const ImportStage = () => {
             const { width, height } = await getImageDimensions(file);
 
             // Generate thumbnail
-            const thumbnail = await createThumbnail(file);
+            await createThumbnail(file);
 
             // Generate embedding for similarity
             const embedding = await generateEmbedding(file);
@@ -146,8 +146,7 @@ export const ImportStage = () => {
           <input
             ref={folderInputRef}
             type="file"
-            webkitdirectory="true"
-            mozdirectory="true"
+            {...{ webkitdirectory: 'true', mozdirectory: 'true' } as any}
             accept={SUPPORTED_FORMATS.join(',')}
             onChange={handleFolderSelect}
             className="hidden"

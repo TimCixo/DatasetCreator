@@ -1,15 +1,15 @@
 import { useState, useEffect, useMemo } from 'react';
 import { useProjectStore } from '../../stores/useProjectStore';
 import { useUIStore } from '../../stores/useUIStore';
-import { computeDistanceMatrix, performClustering, getSimilarImages } from '../../services/similarity/similarityService';
-import { SimilarityResult, SimilarityCluster } from '../../types';
+import { computeDistanceMatrix, performClustering } from '../../services/similarity/similarityService';
+import { SimilarityCluster } from '../../types';
 import { AlertCircle, ChevronDown, Trash2 } from 'lucide-react';
 
 export const SimilarityReviewStage = () => {
   const { getSourceImages, removeSourceImage } = useProjectStore();
   const { addNotification } = useUIStore();
 
-  const [distanceMatrix, setDistanceMatrix] = useState<Map<string, SimilarityResult[]> | null>(null);
+
   const [clusters, setClusters] = useState<SimilarityCluster[]>([]);
   const [selectedClusterId, setSelectedClusterId] = useState<string | null>(null);
   const [isComputing, setIsComputing] = useState(false);
@@ -40,7 +40,6 @@ export const SimilarityReviewStage = () => {
 
         // Compute distance matrix
         const matrix = computeDistanceMatrix(embeddings);
-        setDistanceMatrix(matrix);
 
         // Perform clustering
         const foundClusters = performClustering(

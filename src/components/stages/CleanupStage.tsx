@@ -1,4 +1,4 @@
-import { useState, useRef, useEffect, useCallback } from 'react';
+import { useState, useRef, useEffect } from 'react';
 import { useProjectStore } from '../../stores/useProjectStore';
 import { useUIStore } from '../../stores/useUIStore';
 import { blobToImageData, imageDataToBlob } from '../../services/image/imageProcessor';
@@ -102,7 +102,7 @@ export const CleanupStage = () => {
     if (tool === 'eyedropper') {
       const ctx = displayCanvasRef.current.getContext('2d');
       if (ctx) {
-        const color = sampleColor(ctx, x, y, canvasState.baseImage.width, canvasState.baseImage.height);
+        const color = sampleColor(ctx, x, y);
         setBrushSettings((prev) => ({ ...prev, color }));
         setTool('brush');
         addNotification('info', 'Color picked');

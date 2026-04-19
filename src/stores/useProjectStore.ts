@@ -5,6 +5,7 @@ import {
   SourceImage,
   DatasetItem,
   StageName,
+  TaggingConfig,
   createProject,
   CleanupOverlay,
 } from '../types';
@@ -37,7 +38,7 @@ interface ProjectStore extends ProjectState {
   getStageState: (stage: StageName) => unknown;
   
   // Tagging
-  updateTaggingConfig: (updates: Partial<typeof ProjectState.prototype.taggingConfig>) => void;
+  updateTaggingConfig: (updates: Partial<TaggingConfig>) => void;
 }
 
 export const useProjectStore = create<ProjectStore>()(

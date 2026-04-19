@@ -126,9 +126,7 @@ export const drawEraserStroke = (
 export const sampleColor = (
   ctx: CanvasRenderingContext2D,
   x: number,
-  y: number,
-  width: number,
-  height: number
+  y: number
 ): string => {
   const imageData = ctx.getImageData(x, y, 1, 1);
   const [r, g, b] = imageData.data;

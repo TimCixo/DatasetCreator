@@ -8,7 +8,7 @@ import {
   rotateImage,
   applyGradientMap,
 } from '../image/imageProcessor';
-import { AugmentationConfig, AspectRatio } from '../../types';
+import { AugmentationConfig } from '../../types';
 
 /**
  * Seeded random number generator for reproducible results
@@ -123,13 +123,11 @@ export const applyAugmentation = async (
  * Generate augmentation variants with configs
  */
 export const generateAugmentationConfigs = (
-  baseConfig: AugmentationConfig,
-  selectedImages: string[],
-  augmentationType: AugmentationConfig['type']
+  baseConfig: AugmentationConfig
 ): AugmentationConfig[] => {
   const configs: AugmentationConfig[] = [];
 
-  switch (augmentationType) {
+  switch (baseConfig.type) {
     case 'flip_h':
       configs.push({ type: 'flip_h' });
       break;

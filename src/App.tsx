@@ -82,7 +82,7 @@ function App() {
               </button>
             )
           })}
-        
+        </nav>
       </aside>
 
       {/* Main Content */}

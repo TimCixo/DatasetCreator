@@ -109,7 +109,8 @@ export const ImportStage = () => {
   );
 
   const handleFileSelect = async (event: React.ChangeEvent<HTMLInputElement>) => {
-    const files = Array.from(event.currentTarget.files ?? []);
+    const input = event.currentTarget;
+    const files = input.files ? Array.from(input.files) : [];
     logDev('picker', 'selected files', files.length);
     logDev('picker', 'normalized files', files.length);
 
@@ -122,12 +123,13 @@ export const ImportStage = () => {
         Object.keys(useProjectStore.getState().sourceImages).length
       );
     } finally {
-      event.currentTarget.value = '';
+      input.value = '';
     }
   };
 
   const handleFolderSelect = async (event: React.ChangeEvent<HTMLInputElement>) => {
-    const files = Array.from(event.currentTarget.files ?? []);
+    const input = event.currentTarget;
+    const files = input.files ? Array.from(input.files) : [];
     logDev('folder', 'selected files', files.length);
 
     try {
@@ -139,7 +141,7 @@ export const ImportStage = () => {
         Object.keys(useProjectStore.getState().sourceImages).length
       );
     } finally {
-      event.currentTarget.value = '';
+      input.value = '';
     }
   };
 

@@ -45,78 +45,199 @@ export const computeDistanceMatrix = (
  * Simple agglomerative clustering based on similarity
  */
 export const performClustering = (
-  imageIds: string[],
+  _imageIds: string[],
   distanceMatrix: Map<string, SimilarityResult[]>,
   threshold: number = 0.7
 ): SimilarityCluster[] => {
-  const clusters: SimilarityCluster[] = [];
-  const assigned = new Set<string>();
+  const clusters: string[][] = [];
+  const assignment = new Map<string, number>();
+  const pairMap = buildPairMap(distanceMatrix);
+  const candidatePairs = findSimilarPairs(distanceMatrix, threshold);
+  const representativeThreshold = Math.min(0.995, Math.max(threshold + 0.08, threshold * 1.05));
+  const clusterThreshold = Math.min(0.995, Math.max(threshold + 0.05, threshold));
 
-  // Build adjacency for threshold
-  const adjacency = new Map<string, Set<string>>();
-  for (const id of imageIds) {
-    adjacency.set(id, new Set());
-  }
+  for (const { imageId1, imageId2, similarity } of candidatePairs) {
+    const clusterIndex1 = assignment.get(imageId1);
+    const clusterIndex2 = assignment.get(imageId2);
 
-  for (const [id1, results] of distanceMatrix) {
-    for (const result of results) {
-      if (result.similarity >= threshold) {
-        adjacency.get(id1)!.add(result.imageId2);
-        adjacency.get(result.imageId2)!.add(id1);
+    if (clusterIndex1 == null && clusterIndex2 == null) {
+      clusters.push([imageId1, imageId2]);
+      const newIndex = clusters.length - 1;
+      assignment.set(imageId1, newIndex);
+      assignment.set(imageId2, newIndex);
+      continue;
+    }
+
+    if (clusterIndex1 != null && clusterIndex2 != null) {
+      if (clusterIndex1 === clusterIndex2) {
+        continue;
       }
+
+      const left = clusters[clusterIndex1];
+      const right = clusters[clusterIndex2];
+      if (!left || !right) {
+        continue;
+      }
+
+      if (canMergeClusters(left, right, pairMap, clusterThreshold, representativeThreshold)) {
+        const merged = [...left, ...right];
+        clusters[clusterIndex1] = merged;
+        clusters[clusterIndex2] = [];
+
+        for (const id of merged) {
+          assignment.set(id, clusterIndex1);
+        }
+      }
+      continue;
+    }
+
+    const existingClusterIndex = clusterIndex1 ?? clusterIndex2!;
+    const existingCluster = clusters[existingClusterIndex];
+    const candidateId = clusterIndex1 == null ? imageId1 : imageId2;
+    const anchorId = clusterIndex1 == null ? imageId2 : imageId1;
+
+    if (!existingCluster) {
+      continue;
+    }
+
+    if (
+      canJoinCluster(
+        candidateId,
+        existingCluster,
+        anchorId,
+        pairMap,
+        similarity,
+        clusterThreshold,
+        representativeThreshold
+      )
+    ) {
+      existingCluster.push(candidateId);
+      assignment.set(candidateId, existingClusterIndex);
     }
   }
 
-  // Find connected components
-  let clusterId = 0;
-  for (const id of imageIds) {
-    if (!assigned.has(id)) {
-      const cluster = bfsCluster(id, adjacency, assigned);
-      if (cluster.length > 0) {
-        const avgSimilarity = computeAverageSimilarity(
-          cluster,
-          distanceMatrix
-        );
-        clusters.push({
-          id: `cluster-${clusterId++}`,
-          imageIds: cluster,
-          avgSimilarity,
-        });
-      }
-    }
-  }
-
-  return clusters;
+  return clusters
+    .filter((cluster) => cluster.length > 0)
+    .map((cluster, index) => ({
+      id: `cluster-${index}`,
+      imageIds: cluster,
+      avgSimilarity: computeAverageSimilarity(cluster, distanceMatrix),
+    }));
 };
 
-/**
- * BFS to find connected component (cluster)
- */
-const bfsCluster = (
-  startId: string,
-  adjacency: Map<string, Set<string>>,
-  assigned: Set<string>
-): string[] => {
-  const cluster: string[] = [];
-  const queue: string[] = [startId];
+const buildPairMap = (
+  distanceMatrix: Map<string, SimilarityResult[]>
+): Map<string, SimilarityResult> => {
+  const pairMap = new Map<string, SimilarityResult>();
 
-  while (queue.length > 0) {
-    const current = queue.shift()!;
+  for (const results of distanceMatrix.values()) {
+    for (const result of results) {
+      pairMap.set(createPairKey(result.imageId1, result.imageId2), result);
+    }
+  }
 
-    if (assigned.has(current)) continue;
+  return pairMap;
+};
 
-    assigned.add(current);
-    cluster.push(current);
+const createPairKey = (left: string, right: string): string =>
+  left < right ? `${left}::${right}` : `${right}::${left}`;
 
-    const neighbors = adjacency.get(current) || new Set();
-    for (const neighbor of neighbors) {
-      if (!assigned.has(neighbor)) {
-        queue.push(neighbor);
+const getPairSimilarity = (
+  pairMap: Map<string, SimilarityResult>,
+  left: string,
+  right: string
+): number | null => {
+  const pair = pairMap.get(createPairKey(left, right));
+  return pair ? pair.similarity : null;
+};
+
+const canJoinCluster = (
+  candidateId: string,
+  cluster: string[],
+  anchorId: string,
+  pairMap: Map<string, SimilarityResult>,
+  anchorSimilarity: number,
+  clusterThreshold: number,
+  representativeThreshold: number
+): boolean => {
+  if (anchorSimilarity < clusterThreshold) {
+    return false;
+  }
+
+  const representativeId = cluster[0] ?? anchorId;
+  const representativeSimilarity = getPairSimilarity(pairMap, candidateId, representativeId);
+  if (representativeSimilarity == null || representativeSimilarity < representativeThreshold) {
+    return false;
+  }
+
+  let strongConnections = 0;
+  let similaritySum = 0;
+  let similarityCount = 0;
+
+  for (const memberId of cluster) {
+    const similarity = getPairSimilarity(pairMap, candidateId, memberId);
+    if (similarity == null) {
+      continue;
+    }
+
+    similaritySum += similarity;
+    similarityCount++;
+
+    if (similarity >= clusterThreshold) {
+      strongConnections++;
+    }
+  }
+
+  if (similarityCount === 0) {
+    return false;
+  }
+
+  const averageSimilarity = similaritySum / similarityCount;
+  return strongConnections >= Math.max(1, Math.ceil(cluster.length / 2)) && averageSimilarity >= clusterThreshold;
+};
+
+const canMergeClusters = (
+  left: string[],
+  right: string[],
+  pairMap: Map<string, SimilarityResult>,
+  clusterThreshold: number,
+  representativeThreshold: number
+): boolean => {
+  const leftRepresentative = left[0];
+  const rightRepresentative = right[0];
+  const representativeSimilarity = getPairSimilarity(pairMap, leftRepresentative, rightRepresentative);
+
+  if (representativeSimilarity == null || representativeSimilarity < representativeThreshold) {
+    return false;
+  }
+
+  let strongConnections = 0;
+  let similaritySum = 0;
+  let similarityCount = 0;
+
+  for (const leftId of left) {
+    for (const rightId of right) {
+      const similarity = getPairSimilarity(pairMap, leftId, rightId);
+      if (similarity == null) {
+        continue;
+      }
+
+      similaritySum += similarity;
+      similarityCount++;
+
+      if (similarity >= clusterThreshold) {
+        strongConnections++;
       }
     }
   }
 
-  return cluster;
+  if (similarityCount === 0) {
+    return false;
+  }
+
+  const averageSimilarity = similaritySum / similarityCount;
+  const minimumStrongConnections = Math.max(1, Math.ceil(Math.min(left.length, right.length) / 2));
+  return strongConnections >= minimumStrongConnections && averageSimilarity >= clusterThreshold;
 };
 
 /**

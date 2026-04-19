@@ -6,7 +6,7 @@
 export interface BrushSettings {
   size: number;
   opacity: number;
-  hardness: number; // 0 = soft, 1 = hard
+  hardness: number;
   color: string;
 }
 
@@ -48,49 +48,53 @@ export const cloneImageData = (imageData: ImageData): ImageData => {
  * Draw brush stroke on canvas
  */
 export const drawBrushStroke = (
-  canvas: HTMLCanvasElement,
-  ctx: CanvasRenderingContext2D,
+  source: ImageData,
   startX: number,
   startY: number,
   endX: number,
   endY: number,
   settings: BrushSettings
 ): ImageData => {
+  const { ctx } = createWorkingCanvas(source);
   const { size, opacity, hardness, color } = settings;
   const rgb = hexToRgb(color);
+  const dx = endX - startX;
+  const dy = endY - startY;
+  const distance = Math.max(1, Math.hypot(dx, dy));
+  const step = Math.max(1, size / 4);
+  const radius = size / 2;
 
-  // Use composite operation for better blending
   ctx.save();
-  ctx.globalAlpha = opacity;
   ctx.globalCompositeOperation = 'source-over';
 
-  // Create brush gradient for soft brush
-  const gradient = ctx.createRadialGradient(0, 0, 0, 0, 0, size / 2);
-  gradient.addColorStop(0, `rgba(${rgb.r}, ${rgb.g}, ${rgb.b}, ${hardness})`);
-  gradient.addColorStop(1, `rgba(${rgb.r}, ${rgb.g}, ${rgb.b}, 0)`);
+  for (let traveled = 0; traveled <= distance; traveled += step) {
+    const progress = traveled / distance;
+    const x = startX + dx * progress;
+    const y = startY + dy * progress;
+    const gradient = ctx.createRadialGradient(x, y, 0, x, y, radius);
+    gradient.addColorStop(0, `rgba(${rgb.r}, ${rgb.g}, ${rgb.b}, ${opacity})`);
+    gradient.addColorStop(
+      Math.max(0.01, hardness),
+      `rgba(${rgb.r}, ${rgb.g}, ${rgb.b}, ${opacity * hardness})`
+    );
+    gradient.addColorStop(1, `rgba(${rgb.r}, ${rgb.g}, ${rgb.b}, 0)`);
 
-  ctx.strokeStyle = gradient;
-  ctx.lineWidth = size;
-  ctx.lineCap = 'round';
-  ctx.lineJoin = 'round';
-
-  // Draw line
-  ctx.beginPath();
-  ctx.moveTo(startX, startY);
-  ctx.lineTo(endX, endY);
-  ctx.stroke();
+    ctx.fillStyle = gradient;
+    ctx.beginPath();
+    ctx.arc(x, y, radius, 0, Math.PI * 2);
+    ctx.fill();
+  }
 
   ctx.restore();
 
-  return ctx.getImageData(0, 0, canvas.width, canvas.height);
+  return ctx.getImageData(0, 0, source.width, source.height);
 };
 
 /**
  * Draw eraser stroke
  */
 export const drawEraserStroke = (
-  canvas: HTMLCanvasElement,
-  ctx: CanvasRenderingContext2D,
+  source: ImageData,
   startX: number,
   startY: number,
   endX: number,
@@ -98,26 +102,34 @@ export const drawEraserStroke = (
   size: number,
   hardness: number
 ): ImageData => {
+  const { ctx } = createWorkingCanvas(source);
+  const dx = endX - startX;
+  const dy = endY - startY;
+  const distance = Math.max(1, Math.hypot(dx, dy));
+  const step = Math.max(1, size / 4);
+  const radius = size / 2;
+
   ctx.save();
   ctx.globalCompositeOperation = 'destination-out';
 
-  const gradient = ctx.createRadialGradient(0, 0, 0, 0, 0, size / 2);
-  gradient.addColorStop(0, `rgba(0, 0, 0, ${hardness})`);
-  gradient.addColorStop(1, 'rgba(0, 0, 0, 0)');
+  for (let traveled = 0; traveled <= distance; traveled += step) {
+    const progress = traveled / distance;
+    const x = startX + dx * progress;
+    const y = startY + dy * progress;
+    const gradient = ctx.createRadialGradient(x, y, 0, x, y, radius);
+    gradient.addColorStop(0, 'rgba(0, 0, 0, 1)');
+    gradient.addColorStop(Math.max(0.01, hardness), `rgba(0, 0, 0, ${hardness})`);
+    gradient.addColorStop(1, 'rgba(0, 0, 0, 0)');
 
-  ctx.strokeStyle = gradient;
-  ctx.lineWidth = size;
-  ctx.lineCap = 'round';
-  ctx.lineJoin = 'round';
-
-  ctx.beginPath();
-  ctx.moveTo(startX, startY);
-  ctx.lineTo(endX, endY);
-  ctx.stroke();
+    ctx.fillStyle = gradient;
+    ctx.beginPath();
+    ctx.arc(x, y, radius, 0, Math.PI * 2);
+    ctx.fill();
+  }
 
   ctx.restore();
 
-  return ctx.getImageData(0, 0, canvas.width, canvas.height);
+  return ctx.getImageData(0, 0, source.width, source.height);
 };
 
 /**
@@ -173,10 +185,26 @@ export const addToHistory = (state: CanvasState, imageData: ImageData): CanvasSt
 };
 
 /**
- * Get current canvas state (for display)
+ * Get current canvas state
  */
 export const getCurrentImageData = (state: CanvasState): ImageData => {
   return cloneImageData(state.brushHistory[state.historyIndex]);
+};
+
+const createWorkingCanvas = (
+  source: ImageData
+): { canvas: HTMLCanvasElement; ctx: CanvasRenderingContext2D } => {
+  const canvas = document.createElement('canvas');
+  canvas.width = source.width;
+  canvas.height = source.height;
+
+  const ctx = canvas.getContext('2d');
+  if (!ctx) {
+    throw new Error('Failed to get canvas context');
+  }
+
+  ctx.putImageData(cloneImageData(source), 0, 0);
+  return { canvas, ctx };
 };
 
 /**
@@ -194,8 +222,11 @@ const hexToRgb = (hex: string): { r: number; g: number; b: number } => {
 };
 
 const rgbToHex = (r: number, g: number, b: number): string => {
-  return '#' + [r, g, b].map((x) => {
-    const hex = x.toString(16);
-    return hex.length === 1 ? '0' + hex : hex;
-  }).join('').toUpperCase();
+  return '#' + [r, g, b]
+    .map((value) => {
+      const hex = value.toString(16);
+      return hex.length === 1 ? `0${hex}` : hex;
+    })
+    .join('')
+    .toUpperCase();
 };

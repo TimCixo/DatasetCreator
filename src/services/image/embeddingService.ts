@@ -31,18 +31,20 @@ export const generateEmbedding = async (blob: Blob): Promise<Float32Array> => {
         const imageData = ctx.getImageData(0, 0, canvas.width, canvas.height);
         const data = imageData.data;
 
-        // Generate embedding: histogram of pixel values in different channels
+        // Generate embedding: grayscale histogram over 256 bins
         const embedding = new Float32Array(256);
 
-        // Compute histograms for each channel
+        // Compute grayscale histogram across the full 0-255 range.
+        // The previous implementation divided by 256 before flooring,
+        // which collapsed nearly every pixel into bin 0 and made unrelated
+        // images appear identical.
         for (let i = 0; i < data.length; i += 4) {
           const r = data[i];
           const g = data[i + 1];
           const b = data[i + 2];
 
-          // Simple bin assignment (0-255 values, reduced to 256 bins)
           const avg = (r + g + b) / 3;
-          const bin = Math.floor(avg / 256);
+          const bin = Math.max(0, Math.min(255, Math.floor(avg)));
           embedding[Math.min(bin, 255)]++;
         }
 

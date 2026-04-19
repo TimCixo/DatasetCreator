@@ -1,4 +1,4 @@
-import { useState, useRef, useEffect } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useProjectStore } from '../../stores/useProjectStore';
 import { useUIStore } from '../../stores/useUIStore';
 import { ASPECT_RATIOS, ASPECT_RATIO_LABELS } from '../../lib/constants';
@@ -8,8 +8,8 @@ import {
   moveCropFrame,
   resizeCropFrameFromHandle,
 } from '../../services/crop/cropService';
-import { createDatasetItem, CropFrame, AspectRatio } from '../../types';
-import { AlertCircle, Plus, Trash2 } from 'lucide-react';
+import { createDatasetItem, type CropFrame, type AspectRatio } from '../../types';
+import { AlertCircle, ArrowLeft, Check, Crop as CropIcon, Move, Plus, Trash2 } from 'lucide-react';
 
 interface CropState {
   frames: CropFrame[];
@@ -17,14 +17,30 @@ interface CropState {
   resizingHandle: string | null;
 }
 
+type PanState = {
+  active: boolean;
+  startX: number;
+  startY: number;
+  originX: number;
+  originY: number;
+};
+
+const MIN_ZOOM = 0.1;
+const MAX_ZOOM = 8;
+
 export const CropStage = () => {
-  const { getSourceImages, addDatasetItem } = useProjectStore();
+  const sourceImages = useProjectStore((state) => Object.values(state.sourceImages));
+  const addDatasetItem = useProjectStore((state) => state.addDatasetItem);
+  const setCurrentStage = useProjectStore((state) => state.setCurrentStage);
   const { addNotification } = useUIStore();
 
   const canvasRef = useRef<HTMLCanvasElement>(null);
-  const containerRef = useRef<HTMLDivElement>(null);
+  const workspaceRef = useRef<HTMLDivElement>(null);
+  const isSpacePressedRef = useRef(false);
+  const cropSessionsRef = useRef<Record<string, CropState>>({});
+  const baseImageRef = useRef<HTMLImageElement | null>(null);
 
-  const [currentImageIndex, setCurrentImageIndex] = useState(0);
+  const [selectedImageId, setSelectedImageId] = useState<string | null>(null);
   const [selectedAspectRatio, setSelectedAspectRatio] = useState<AspectRatio>('1:1');
   const [cropState, setCropState] = useState<CropState>({
     frames: [],
@@ -32,61 +48,73 @@ export const CropStage = () => {
     resizingHandle: null,
   });
   const [zoom, setZoom] = useState(1);
+  const [pan, setPan] = useState({ x: 0, y: 0 });
   const [isDragging, setIsDragging] = useState(false);
   const [dragStart, setDragStart] = useState({ x: 0, y: 0 });
+  const [panState, setPanState] = useState<PanState>({
+    active: false,
+    startX: 0,
+    startY: 0,
+    originX: 0,
+    originY: 0,
+  });
+  const [appliedImageIds, setAppliedImageIds] = useState<Set<string>>(new Set());
 
-  const sourceImages = getSourceImages();
+  const selectedIndex = useMemo(
+    () => (selectedImageId ? sourceImages.findIndex((image) => image.id === selectedImageId) : -1),
+    [selectedImageId, sourceImages]
+  );
+  const selectedImage = selectedIndex >= 0 ? sourceImages[selectedIndex] : null;
 
+  const fitImageToWorkspace = useCallback((width: number, height: number) => {
+    if (!workspaceRef.current) {
+      setZoom(1);
+      setPan({ x: 0, y: 0 });
+      return;
+    }
 
-  if (sourceImages.length === 0) {
-    return (
-      <div className="text-center py-12">
-        <AlertCircle className="mx-auto h-12 w-12 text-muted-foreground mb-4" />
-        <p className="text-muted-foreground">No source images available. Import images first.</p>
-      </div>
-    );
-  }
+    const bounds = workspaceRef.current.getBoundingClientRect();
+    const fitScale = Math.min(bounds.width / width, bounds.height / height, 1);
+    const resolvedZoom = Math.max(MIN_ZOOM, fitScale);
+    const offsetX = Math.max((bounds.width - width * resolvedZoom) / 2, 0);
+    const offsetY = Math.max((bounds.height - height * resolvedZoom) / 2, 0);
 
-  const currentImage = sourceImages[currentImageIndex];
+    setZoom(resolvedZoom);
+    setPan({ x: offsetX, y: offsetY });
+  }, []);
 
-  // Draw canvas preview
-  useEffect(() => {
-    if (!canvasRef.current || !currentImage) return;
+  const renderCanvas = useCallback((image: typeof selectedImage, state: CropState, currentZoom: number) => {
+    if (!canvasRef.current || !image) {
+      return;
+    }
 
     const canvas = canvasRef.current;
-    canvas.width = currentImage.width;
-    canvas.height = currentImage.height;
+    canvas.width = image.width;
+    canvas.height = image.height;
 
     const ctx = canvas.getContext('2d');
-    if (!ctx) return;
+    if (!ctx) {
+      return;
+    }
 
-    // Draw image
-    const url = URL.createObjectURL(currentImage.originalFile);
-    const img = new Image();
+    const drawFrames = () => {
+      state.frames.forEach((frame) => {
+        const isSelected = frame.id === state.selectedFrameId;
 
-    img.onload = () => {
-      ctx.drawImage(img, 0, 0);
-
-      // Draw crop frames
-      cropState.frames.forEach((frame) => {
-        const isSelected = frame.id === cropState.selectedFrameId;
-
-        // Draw frame
-        ctx.strokeStyle = isSelected ? '#3b82f6' : '#8b5cf6';
-        ctx.lineWidth = 2 / zoom;
+        ctx.strokeStyle = isSelected ? '#3b82f6' : '#22c55e';
+        ctx.lineWidth = 2 / currentZoom;
         ctx.strokeRect(frame.x, frame.y, frame.width, frame.height);
 
-        // Draw fill
-        ctx.fillStyle = isSelected ? 'rgba(59, 130, 246, 0.1)' : 'rgba(139, 92, 246, 0.05)';
+        ctx.fillStyle = isSelected ? 'rgba(59, 130, 246, 0.12)' : 'rgba(34, 197, 94, 0.08)';
         ctx.fillRect(frame.x, frame.y, frame.width, frame.height);
 
-        // Draw handles if selected
         if (isSelected) {
-          const handleSize = 8 / zoom;
+          const handleSize = 8 / currentZoom;
           const handles = ['tl', 'tr', 'bl', 'br', 't', 'b', 'l', 'r'];
 
           handles.forEach((handle) => {
-            let hx = 0, hy = 0;
+            let hx = 0;
+            let hy = 0;
 
             if (handle.includes('l')) hx = frame.x;
             else if (handle.includes('r')) hx = frame.x + frame.width;
@@ -101,147 +129,295 @@ export const CropStage = () => {
           });
         }
       });
-
-      URL.revokeObjectURL(url);
     };
 
-    img.src = url;
-  }, [cropState.frames, cropState.selectedFrameId, currentImage, zoom]);
+    const existingImage = baseImageRef.current;
+    if (existingImage) {
+      ctx.clearRect(0, 0, canvas.width, canvas.height);
+      ctx.drawImage(existingImage, 0, 0);
+      drawFrames();
+      return;
+    }
 
-  const getCanvasCoordinates = (e: React.MouseEvent): [number, number] => {
-    if (!canvasRef.current) return [0, 0];
+    const url = URL.createObjectURL(image.originalFile);
+    const img = new Image();
+    img.onload = () => {
+      baseImageRef.current = img;
+      ctx.clearRect(0, 0, canvas.width, canvas.height);
+      ctx.drawImage(img, 0, 0);
+      drawFrames();
+      URL.revokeObjectURL(url);
+    };
+    img.onerror = () => {
+      URL.revokeObjectURL(url);
+      addNotification('error', 'Failed to render crop image');
+    };
+    img.src = url;
+  }, [addNotification]);
+
+  const openImageInEditor = useCallback((imageId: string) => {
+    const image = sourceImages.find((candidate) => candidate.id === imageId);
+    if (!image) {
+      return;
+    }
+
+    const nextState = cropSessionsRef.current[image.id] ?? {
+      frames: [],
+      selectedFrameId: null,
+      resizingHandle: null,
+    };
+
+    cropSessionsRef.current[image.id] = nextState;
+    baseImageRef.current = null;
+    setSelectedImageId(image.id);
+    setCropState(nextState);
+    fitImageToWorkspace(image.width, image.height);
+
+    if (import.meta.env.DEV) {
+      console.log(`[crop] active image id: ${image.id}`);
+      console.log(`[crop] crop frame count: ${nextState.frames.length}`);
+    }
+  }, [fitImageToWorkspace, sourceImages]);
+
+  useEffect(() => {
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (event.code === 'Space') {
+        isSpacePressedRef.current = true;
+      }
+    };
+
+    const handleKeyUp = (event: KeyboardEvent) => {
+      if (event.code === 'Space') {
+        isSpacePressedRef.current = false;
+      }
+    };
+
+    window.addEventListener('keydown', handleKeyDown);
+    window.addEventListener('keyup', handleKeyUp);
+
+    return () => {
+      window.removeEventListener('keydown', handleKeyDown);
+      window.removeEventListener('keyup', handleKeyUp);
+    };
+  }, []);
+
+  useEffect(() => {
+    if (!selectedImage) {
+      return;
+    }
+
+    renderCanvas(selectedImage, cropState, zoom);
+  }, [cropState, renderCanvas, selectedImage, zoom]);
+
+  const updateCropState = useCallback((nextState: CropState) => {
+    if (!selectedImage) {
+      return;
+    }
+
+    cropSessionsRef.current[selectedImage.id] = nextState;
+    setCropState(nextState);
+  }, [selectedImage]);
+
+  const getCanvasCoordinates = useCallback((clientX: number, clientY: number): [number, number] => {
+    if (!canvasRef.current) {
+      return [0, 0];
+    }
 
     const rect = canvasRef.current.getBoundingClientRect();
-    const x = (e.clientX - rect.left) / zoom;
-    const y = (e.clientY - rect.top) / zoom;
-    return [x, y];
-  };
+    return [
+      (clientX - rect.left) / zoom,
+      (clientY - rect.top) / zoom,
+    ];
+  }, [zoom]);
 
-  const handleCanvasMouseDown = (e: React.MouseEvent) => {
-    const [x, y] = getCanvasCoordinates(e);
+  const beginPan = useCallback((clientX: number, clientY: number) => {
+    setPanState({
+      active: true,
+      startX: clientX,
+      startY: clientY,
+      originX: pan.x,
+      originY: pan.y,
+    });
+  }, [pan.x, pan.y]);
 
-    // Check if clicking on a handle
+  const handleCanvasMouseDown = (event: React.MouseEvent<HTMLCanvasElement>) => {
+    if (!selectedImage) {
+      return;
+    }
+
+    if (event.button === 1 || (event.button === 0 && isSpacePressedRef.current)) {
+      event.preventDefault();
+      beginPan(event.clientX, event.clientY);
+      return;
+    }
+
+    if (event.button !== 0) {
+      return;
+    }
+
+    const [x, y] = getCanvasCoordinates(event.clientX, event.clientY);
+
     for (const frame of cropState.frames) {
-      if (frame.id === cropState.selectedFrameId) {
-        const handles = ['tl', 'tr', 'bl', 'br', 't', 'b', 'l', 'r'];
-        const handleSize = 16 / zoom;
+      if (frame.id !== cropState.selectedFrameId) {
+        continue;
+      }
 
-        for (const handle of handles) {
-          let hx = 0, hy = 0;
+      const handles = ['tl', 'tr', 'bl', 'br', 't', 'b', 'l', 'r'];
+      const handleSize = 16 / zoom;
 
-          if (handle.includes('l')) hx = frame.x;
-          else if (handle.includes('r')) hx = frame.x + frame.width;
-          else hx = frame.x + frame.width / 2;
+      for (const handle of handles) {
+        let hx = 0;
+        let hy = 0;
 
-          if (handle.includes('t')) hy = frame.y;
-          else if (handle.includes('b')) hy = frame.y + frame.height;
-          else hy = frame.y + frame.height / 2;
+        if (handle.includes('l')) hx = frame.x;
+        else if (handle.includes('r')) hx = frame.x + frame.width;
+        else hx = frame.x + frame.width / 2;
 
-          if (
-            Math.abs(x - hx) < handleSize / 2 &&
-            Math.abs(y - hy) < handleSize / 2
-          ) {
-            setCropState((prev) => ({
-              ...prev,
-              resizingHandle: handle,
-            }));
-            setIsDragging(true);
-            setDragStart({ x, y });
-            return;
-          }
+        if (handle.includes('t')) hy = frame.y;
+        else if (handle.includes('b')) hy = frame.y + frame.height;
+        else hy = frame.y + frame.height / 2;
+
+        if (Math.abs(x - hx) < handleSize / 2 && Math.abs(y - hy) < handleSize / 2) {
+          updateCropState({
+            ...cropState,
+            resizingHandle: handle,
+          });
+          setIsDragging(true);
+          setDragStart({ x, y });
+          return;
         }
       }
     }
 
-    // Check if clicking on a frame
     const clickedFrame = cropState.frames.find(
-      (f) =>
-        x >= f.x &&
-        x <= f.x + f.width &&
-        y >= f.y &&
-        y <= f.y + f.height
+      (frame) =>
+        x >= frame.x &&
+        x <= frame.x + frame.width &&
+        y >= frame.y &&
+        y <= frame.y + frame.height
     );
 
     if (clickedFrame) {
-      setCropState((prev) => ({
-        ...prev,
+      updateCropState({
+        ...cropState,
         selectedFrameId: clickedFrame.id,
-      }));
+      });
       setIsDragging(true);
       setDragStart({ x, y });
     }
   };
 
-  const handleCanvasMouseMove = (e: React.MouseEvent) => {
-    if (!isDragging) return;
+  const handleCanvasMouseMove = (event: React.MouseEvent<HTMLCanvasElement>) => {
+    if (panState.active) {
+      setPan({
+        x: panState.originX + (event.clientX - panState.startX),
+        y: panState.originY + (event.clientY - panState.startY),
+      });
+      return;
+    }
 
-    const [x, y] = getCanvasCoordinates(e);
+    if (!isDragging || !selectedImage) {
+      return;
+    }
+
+    const [x, y] = getCanvasCoordinates(event.clientX, event.clientY);
     const dx = x - dragStart.x;
     const dy = y - dragStart.y;
 
-    setCropState((prev) => {
-      const selectedFrame = prev.frames.find((f) => f.id === prev.selectedFrameId);
-      if (!selectedFrame) return prev;
+    const selectedFrame = cropState.frames.find((frame) => frame.id === cropState.selectedFrameId);
+    if (!selectedFrame) {
+      return;
+    }
 
-      let newFrame: CropFrame;
-
-      if (prev.resizingHandle) {
-        newFrame = resizeCropFrameFromHandle(
+    const nextFrame = cropState.resizingHandle
+      ? resizeCropFrameFromHandle(
           selectedFrame,
-          prev.resizingHandle,
+          cropState.resizingHandle,
           dx,
           dy,
-          currentImage.width,
-          currentImage.height
-        );
-      } else {
-        newFrame = moveCropFrame(
+          selectedImage.width,
+          selectedImage.height
+        )
+      : moveCropFrame(
           selectedFrame,
           dx,
           dy,
-          currentImage.width,
-          currentImage.height
+          selectedImage.width,
+          selectedImage.height
         );
-      }
 
-      return {
-        ...prev,
-        frames: prev.frames.map((f) => (f.id === selectedFrame.id ? newFrame : f)),
-      };
+    updateCropState({
+      ...cropState,
+      frames: cropState.frames.map((frame) => (frame.id === selectedFrame.id ? nextFrame : frame)),
     });
-
     setDragStart({ x, y });
   };
 
-  const handleCanvasMouseUp = () => {
-    setIsDragging(false);
-    setCropState((prev) => ({ ...prev, resizingHandle: null }));
+  const finishInteraction = () => {
+    if (panState.active) {
+      setPanState((prev) => ({ ...prev, active: false }));
+    }
+
+    if (isDragging) {
+      setIsDragging(false);
+      updateCropState({
+        ...cropState,
+        resizingHandle: null,
+      });
+    }
+  };
+
+  const handleWheel = (event: React.WheelEvent<HTMLDivElement>) => {
+    event.preventDefault();
+    const scaleFactor = event.deltaY < 0 ? 1.1 : 0.9;
+    const nextZoom = Math.max(MIN_ZOOM, Math.min(MAX_ZOOM, zoom * scaleFactor));
+    const ratio = nextZoom / zoom;
+
+    setPan((prev) => ({
+      x: event.clientX - (event.clientX - prev.x) * ratio,
+      y: event.clientY - (event.clientY - prev.y) * ratio,
+    }));
+    setZoom(nextZoom);
   };
 
   const handleAddCropFrame = () => {
+    if (!selectedImage) {
+      return;
+    }
+
     const newFrame = createCenteredCropFrame(
-      currentImage.width,
-      currentImage.height,
+      selectedImage.width,
+      selectedImage.height,
       selectedAspectRatio
     );
 
-    setCropState((prev) => ({
-      ...prev,
-      frames: [...prev.frames, newFrame],
+    const nextState = {
+      ...cropState,
+      frames: [...cropState.frames, newFrame],
       selectedFrameId: newFrame.id,
-    }));
+    };
+    updateCropState(nextState);
+
+    if (import.meta.env.DEV) {
+      console.log(`[crop] crop frame count: ${nextState.frames.length}`);
+    }
   };
 
-  const handleRemoveCropFrame = (id: string) => {
-    setCropState((prev) => ({
-      ...prev,
-      frames: prev.frames.filter((f) => f.id !== id),
-      selectedFrameId: prev.selectedFrameId === id ? null : prev.selectedFrameId,
-    }));
+  const handleRemoveSelectedFrame = () => {
+    if (!cropState.selectedFrameId) {
+      return;
+    }
+
+    const nextFrames = cropState.frames.filter((frame) => frame.id !== cropState.selectedFrameId);
+    updateCropState({
+      ...cropState,
+      frames: nextFrames,
+      selectedFrameId: nextFrames[0]?.id ?? null,
+    });
   };
 
   const handleApplyCrops = async () => {
-    if (cropState.frames.length === 0) {
+    if (!selectedImage || cropState.frames.length === 0) {
       addNotification('warning', 'No crop frames created');
       return;
     }
@@ -249,7 +425,7 @@ export const CropStage = () => {
     try {
       for (const frame of cropState.frames) {
         const croppedBlob = await cropImage(
-          currentImage.originalFile,
+          selectedImage.originalFile,
           frame.x,
           frame.y,
           frame.width,
@@ -257,7 +433,7 @@ export const CropStage = () => {
         );
 
         const datasetItem = createDatasetItem(
-          currentImage.id,
+          selectedImage.id,
           croppedBlob,
           frame.width,
           frame.height,
@@ -265,166 +441,227 @@ export const CropStage = () => {
           frame.aspectRatio
         );
         datasetItem.cropFrame = frame;
-
         addDatasetItem(datasetItem);
       }
 
+      setAppliedImageIds((prev) => new Set(prev).add(selectedImage.id));
       addNotification('success', `Created ${cropState.frames.length} crop${cropState.frames.length !== 1 ? 's' : ''}`);
-
-      // Move to next image
-      if (currentImageIndex < sourceImages.length - 1) {
-        setCurrentImageIndex(currentImageIndex + 1);
-        setCropState({ frames: [], selectedFrameId: null, resizingHandle: null });
-      } else {
-        addNotification('success', 'All crops completed');
-      }
     } catch (error) {
       console.error('Failed to apply crops:', error);
       addNotification('error', 'Failed to apply crops');
     }
   };
 
-  return (
-    <div className="space-y-4">
-      {/* Toolbar */}
-      <div className="rounded-lg border border-border bg-card p-4 space-y-4">
-        <div className="flex items-center justify-between gap-4">
-          <div className="flex gap-4 items-center">
-            <div>
-              <label className="text-sm font-medium block mb-1">Aspect Ratio</label>
-              <select
-                value={selectedAspectRatio}
-                onChange={(e) => setSelectedAspectRatio(e.target.value as AspectRatio)}
-                className="px-3 py-2 rounded-md border border-border bg-background text-sm"
-              >
-                {ASPECT_RATIOS.map((ratio) => (
-                  <option key={ratio} value={ratio}>
-                    {ASPECT_RATIO_LABELS[ratio]}
-                  </option>
-                ))}
-              </select>
-            </div>
+  const handleFinishCrop = () => {
+    setCurrentStage('augment');
+  };
 
+  if (sourceImages.length === 0) {
+    return (
+      <div className="text-center py-12">
+        <AlertCircle className="mx-auto h-12 w-12 text-muted-foreground mb-4" />
+        <p className="text-muted-foreground">No source images available. Import images first.</p>
+      </div>
+    );
+  }
+
+  return (
+    <div className="grid grid-cols-[280px_minmax(0,1fr)] gap-4 h-[calc(100vh-13rem)]">
+      <aside className="rounded-lg border border-border bg-card overflow-hidden flex flex-col">
+        <div className="p-4 border-b border-border">
+          <div className="flex items-center justify-between gap-3 mb-3">
+            <div>
+              <h3 className="font-semibold">Crop Gallery</h3>
+              <p className="text-xs text-muted-foreground">{sourceImages.length} images available</p>
+            </div>
             <button
-              onClick={handleAddCropFrame}
-              className="px-4 py-2 bg-primary text-primary-foreground rounded-md hover:opacity-90 transition-opacity flex items-center gap-2"
+              onClick={handleFinishCrop}
+              className="px-3 py-2 bg-primary text-primary-foreground rounded-md hover:opacity-90 transition-opacity text-sm font-medium"
             >
-              <Plus size={16} />
-              Add Frame
+              Finish Crop
             </button>
           </div>
-
-          <div className="text-sm text-muted-foreground">
-            {cropState.frames.length} frame{cropState.frames.length !== 1 ? 's' : ''}
-          </div>
+          <p className="text-xs text-muted-foreground">
+            Select any image to edit. Crop sessions persist while moving between images.
+          </p>
         </div>
 
-        {cropState.frames.length > 0 && (
-          <div className="space-y-2">
-            <label className="text-sm font-medium block">Crop Frames</label>
-            <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 gap-2">
-              {cropState.frames.map((frame) => (
-                <div
-                  key={frame.id}
-                  className={`p-2 rounded-md border transition-colors cursor-pointer ${
-                    frame.id === cropState.selectedFrameId
-                      ? 'border-blue-500 bg-blue-500/10'
-                      : 'border-border hover:border-primary'
-                  }`}
-                  onClick={() =>
-                    setCropState((prev) => ({
-                      ...prev,
-                      selectedFrameId: frame.id,
-                    }))
-                  }
-                >
-                  <div className="text-xs font-mono mb-1">
-                    {ASPECT_RATIO_LABELS[frame.aspectRatio]}
-                  </div>
-                  <div className="text-xs text-muted-foreground mb-2">
-                    {Math.round(frame.width)} × {Math.round(frame.height)}
-                  </div>
-                  <button
-                    onClick={(e) => {
-                      e.stopPropagation();
-                      handleRemoveCropFrame(frame.id);
-                    }}
-                    className="w-full px-2 py-1 text-xs bg-destructive/20 text-destructive hover:bg-destructive/30 rounded transition-colors"
-                  >
-                    <Trash2 size={12} className="inline" /> Remove
-                  </button>
+        <div className="flex-1 overflow-y-auto p-3 space-y-2">
+          {sourceImages.map((image, index) => (
+            <button
+              key={image.id}
+              onClick={() => openImageInEditor(image.id)}
+              className={`w-full text-left rounded-lg border p-2 transition-colors ${
+                selectedImageId === image.id
+                  ? 'border-primary bg-primary/10'
+                  : 'border-border hover:border-primary/40 bg-background'
+              }`}
+            >
+              <div className="aspect-square rounded-md overflow-hidden bg-black mb-2 flex items-center justify-center">
+                {image.previewUrl ? (
+                  <img src={image.previewUrl} alt={image.fileName} className="w-full h-full object-cover" />
+                ) : (
+                  <span className="text-xs text-muted-foreground px-2 text-center">{image.width} × {image.height}</span>
+                )}
+              </div>
+              <div className="flex items-center justify-between gap-2">
+                <div>
+                  <p className="text-sm font-medium truncate">#{index + 1}</p>
+                  <p className="text-xs text-muted-foreground truncate">{image.fileName}</p>
                 </div>
+                {appliedImageIds.has(image.id) && <Check size={16} className="text-green-500 shrink-0" />}
+              </div>
+            </button>
+          ))}
+        </div>
+      </aside>
+
+      <section className="rounded-lg border border-border bg-card overflow-hidden flex flex-col min-w-0">
+        {!selectedImage ? (
+          <div className="flex-1 p-6 overflow-y-auto">
+            <div className="mb-4">
+              <h3 className="text-lg font-semibold">Gallery Overview</h3>
+              <p className="text-sm text-muted-foreground">
+                Choose an image from the left to open the crop editor, or finish the stage directly.
+              </p>
+            </div>
+            <div className="grid grid-cols-2 md:grid-cols-3 xl:grid-cols-4 gap-4">
+              {sourceImages.map((image, index) => (
+                <button
+                  key={image.id}
+                  onClick={() => openImageInEditor(image.id)}
+                  className="rounded-lg border border-border bg-background overflow-hidden hover:border-primary/50 transition-colors text-left"
+                >
+                  <div className="aspect-square bg-black flex items-center justify-center overflow-hidden">
+                    {image.previewUrl ? (
+                      <img src={image.previewUrl} alt={image.fileName} className="w-full h-full object-cover" />
+                    ) : (
+                      <span className="text-xs text-muted-foreground">{image.width} × {image.height}</span>
+                    )}
+                  </div>
+                  <div className="p-3">
+                    <p className="font-medium text-sm">Image #{index + 1}</p>
+                    <p className="text-xs text-muted-foreground truncate">{image.fileName}</p>
+                  </div>
+                </button>
               ))}
             </div>
           </div>
+        ) : (
+          <>
+            <div className="border-b border-border p-4 flex items-center justify-between gap-4">
+              <div className="flex items-center gap-3">
+                <button
+                  onClick={() => setSelectedImageId(null)}
+                  className="p-2 rounded-md bg-secondary hover:bg-muted transition-colors"
+                  title="Back to gallery"
+                >
+                  <ArrowLeft size={18} />
+                </button>
+                <div>
+                  <h3 className="font-semibold">Crop Image</h3>
+                  <p className="text-xs text-muted-foreground">
+                    {selectedImage.fileName} • {selectedIndex + 1} / {sourceImages.length}
+                  </p>
+                </div>
+              </div>
+
+              <div className="flex items-center gap-2 text-xs text-muted-foreground">
+                <span>Wheel: zoom</span>
+                <span>•</span>
+                <span>MMB / Space+Drag: pan</span>
+              </div>
+            </div>
+
+            <div className="border-b border-border p-4 flex items-center gap-4 flex-wrap">
+              <div>
+                <label className="text-sm font-medium block mb-1">Aspect Ratio</label>
+                <select
+                  value={selectedAspectRatio}
+                  onChange={(event) => setSelectedAspectRatio(event.target.value as AspectRatio)}
+                  className="px-3 py-2 rounded-md border border-border bg-background text-sm"
+                >
+                  {ASPECT_RATIOS.map((ratio) => (
+                    <option key={ratio} value={ratio}>
+                      {ASPECT_RATIO_LABELS[ratio]}
+                    </option>
+                  ))}
+                </select>
+              </div>
+
+              <div className="text-sm text-muted-foreground mt-5">
+                {cropState.frames.length} frame{cropState.frames.length !== 1 ? 's' : ''}
+              </div>
+
+              <div className="ml-auto">
+                <button
+                  onClick={() => void handleApplyCrops()}
+                  disabled={cropState.frames.length === 0}
+                  className="px-4 py-2 bg-primary text-primary-foreground rounded-md hover:opacity-90 disabled:opacity-50 transition-opacity text-sm font-medium"
+                >
+                  Apply Crops
+                </button>
+              </div>
+            </div>
+
+            <div className="flex-1 min-h-0 grid grid-cols-[72px_minmax(0,1fr)]">
+              <div className="border-r border-border bg-secondary/20 p-3 flex flex-col items-center gap-3">
+                <button
+                  onClick={handleAddCropFrame}
+                  className="p-3 rounded-md bg-primary text-primary-foreground hover:opacity-90 transition-opacity"
+                  title="Add crop frame"
+                >
+                  <Plus size={18} />
+                </button>
+                <button
+                  onClick={handleRemoveSelectedFrame}
+                  disabled={!cropState.selectedFrameId}
+                  className="p-3 rounded-md bg-secondary hover:bg-muted disabled:opacity-50 transition-colors"
+                  title="Remove selected frame"
+                >
+                  <Trash2 size={18} />
+                </button>
+                <button
+                  onClick={() => setCropState((prev) => ({ ...prev, selectedFrameId: prev.frames[0]?.id ?? null }))}
+                  disabled={cropState.frames.length === 0}
+                  className="p-3 rounded-md bg-secondary hover:bg-muted disabled:opacity-50 transition-colors"
+                  title="Select first frame"
+                >
+                  <Move size={18} />
+                </button>
+                <button
+                  onClick={() => void handleApplyCrops()}
+                  disabled={cropState.frames.length === 0}
+                  className="p-3 rounded-md bg-secondary hover:bg-muted disabled:opacity-50 transition-colors"
+                  title="Apply crops"
+                >
+                  <CropIcon size={18} />
+                </button>
+              </div>
+
+              <div
+                ref={workspaceRef}
+                onWheel={handleWheel}
+                className="relative overflow-hidden bg-black"
+              >
+                <canvas
+                  ref={canvasRef}
+                  onMouseDown={handleCanvasMouseDown}
+                  onMouseMove={handleCanvasMouseMove}
+                  onMouseUp={finishInteraction}
+                  onMouseLeave={finishInteraction}
+                  style={{
+                    transform: `translate(${pan.x}px, ${pan.y}px) scale(${zoom})`,
+                    transformOrigin: 'top left',
+                    cursor: panState.active || isSpacePressedRef.current ? 'grab' : 'move',
+                  }}
+                  className="absolute top-0 left-0 select-none"
+                />
+              </div>
+            </div>
+          </>
         )}
-      </div>
-
-      {/* Canvas */}
-      <div
-        ref={containerRef}
-        className="rounded-lg border border-border overflow-auto bg-black flex items-center justify-center"
-        style={{ height: '500px' }}
-      >
-        <canvas
-          ref={canvasRef}
-          onMouseDown={handleCanvasMouseDown}
-          onMouseMove={handleCanvasMouseMove}
-          onMouseUp={handleCanvasMouseUp}
-          onMouseLeave={handleCanvasMouseUp}
-          style={{ transform: `scale(${zoom})` }}
-          className="block cursor-move"
-        />
-      </div>
-
-      {/* Controls */}
-      <div className="flex gap-4 items-center">
-        <button
-          onClick={() => setZoom(Math.max(0.5, zoom - 0.2))}
-          className="px-4 py-2 bg-secondary rounded-md hover:bg-muted transition-colors"
-        >
-          Zoom Out
-        </button>
-
-        <span className="text-sm font-mono w-12 text-center">{zoom.toFixed(1)}x</span>
-
-        <button
-          onClick={() => setZoom(zoom + 0.2)}
-          className="px-4 py-2 bg-secondary rounded-md hover:bg-muted transition-colors"
-        >
-          Zoom In
-        </button>
-
-        <div className="flex-1" />
-
-        <button
-          onClick={() => setCurrentImageIndex(Math.max(0, currentImageIndex - 1))}
-          disabled={currentImageIndex === 0}
-          className="px-4 py-2 bg-secondary rounded-md hover:bg-muted disabled:opacity-50 transition-colors"
-        >
-          Previous
-        </button>
-
-        <span className="text-sm text-muted-foreground">
-          Image {currentImageIndex + 1} of {sourceImages.length}
-        </span>
-
-        <button
-          onClick={() => setCurrentImageIndex(Math.min(sourceImages.length - 1, currentImageIndex + 1))}
-          disabled={currentImageIndex === sourceImages.length - 1}
-          className="px-4 py-2 bg-secondary rounded-md hover:bg-muted disabled:opacity-50 transition-colors"
-        >
-          Next
-        </button>
-
-        <button
-          onClick={handleApplyCrops}
-          disabled={cropState.frames.length === 0}
-          className="px-6 py-2 bg-primary text-primary-foreground rounded-md hover:opacity-90 disabled:opacity-50 transition-opacity"
-        >
-          Apply Crops
-        </button>
-      </div>
+      </section>
     </div>
   );
 };

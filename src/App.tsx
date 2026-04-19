@@ -1,4 +1,4 @@
-import { useEffect, useMemo } from 'react'
+import { useEffect } from 'react'
 import { useProjectStore } from './stores/useProjectStore'
 import { useUIStore } from './stores/useUIStore'
 import { STAGE_LABELS, STAGES } from './lib/constants'
@@ -13,10 +13,11 @@ import { ExportStage } from './components/stages/ExportStage'
 import './App.css'
 
 function App() {
-  const { currentStage, setCurrentStage, initializeProject, getSourceImages } = useProjectStore()
+  const currentStage = useProjectStore((state) => state.currentStage)
+  const setCurrentStage = useProjectStore((state) => state.setCurrentStage)
+  const initializeProject = useProjectStore((state) => state.initializeProject)
+  const sourceImages = useProjectStore((state) => Object.values(state.sourceImages))
   const { darkMode, setDarkMode } = useUIStore()
-  
-  const sourceImages = useMemo(() => getSourceImages(), [getSourceImages])
 
   useEffect(() => {
     // Initialize project on first load

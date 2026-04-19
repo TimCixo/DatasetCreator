@@ -1,7 +1,7 @@
 import { useState, useCallback, useRef } from 'react';
 import { useProjectStore } from '../../stores/useProjectStore';
 import { useUIStore } from '../../stores/useUIStore';
-import { createSourceImage } from '../../types';
+import { createSourceImage, type SourceImage } from '../../types';
 import { getImageDimensions, createThumbnail } from '../../services/image/imageProcessor';
 import { generateEmbedding, generateImageHash } from '../../services/image/embeddingService';
 
@@ -11,11 +11,13 @@ const SUPPORTED_FORMATS = ['image/jpeg', 'image/png', 'image/webp', 'image/gif']
 
 export const ImportStage = () => {
   const {
-    addSourceImage,
+    addSourceImages,
     removeSourceImage,
-    getSourceImages,
     setCurrentStage,
   } = useProjectStore();
+
+  const sourceImages = useProjectStore((state) => state.sourceImages);
+  const images = Object.values(sourceImages);
 
   const { addNotification } = useUIStore();
   
@@ -24,48 +26,60 @@ export const ImportStage = () => {
   const fileInputRef = useRef<HTMLInputElement>(null);
   const folderInputRef = useRef<HTMLInputElement>(null);
 
+  const logDev = useCallback((scope: string, message: string, value: number) => {
+    if (import.meta.env.DEV) {
+      console.log(`[${scope}] ${message}: ${value}`);
+    }
+  }, []);
+
+  const processImportedFile = useCallback(
+    async (file: File): Promise<SourceImage | null> => {
+      if (!SUPPORTED_FORMATS.includes(file.type)) {
+        console.warn(`Skipping ${file.name}: unsupported format`);
+        return null;
+      }
+
+      const { width, height } = await getImageDimensions(file);
+      const thumbnail = await createThumbnail(file);
+      const embedding = await generateEmbedding(file);
+      const hash = await generateImageHash(file);
+      const previewUrl = URL.createObjectURL(file);
+
+      const sourceImage = createSourceImage(
+        file,
+        file.name,
+        width,
+        height,
+        previewUrl
+      );
+
+      sourceImage.thumbnail = thumbnail;
+      sourceImage.embedding = embedding;
+      sourceImage.hash = hash;
+
+      return sourceImage;
+    },
+    []
+  );
+
   const importImages = useCallback(
-    async (files: FileList | null) => {
-      if (!files) return;
+    async (files: File[]): Promise<number> => {
+      if (files.length === 0) {
+        return 0;
+      }
 
       setIsLoading(true);
-      const newImages = [];
+      logDev('import', 'received files', files.length);
+      const newImages: SourceImage[] = [];
 
       try {
-        for (let i = 0; i < files.length; i++) {
-          const file = files[i];
-
-          // Validate format
-          if (!SUPPORTED_FORMATS.includes(file.type)) {
-            console.warn(`Skipping ${file.name}: unsupported format`);
-            continue;
-          }
-
+        for (const file of files) {
           try {
-            // Get image dimensions
-            const { width, height } = await getImageDimensions(file);
+            const sourceImage = await processImportedFile(file);
 
-            // Generate thumbnail
-            await createThumbnail(file);
-
-            // Generate embedding for similarity
-            const embedding = await generateEmbedding(file);
-
-            // Generate perceptual hash
-            const hash = await generateImageHash(file);
-
-            // Create source image
-            const sourceImage = createSourceImage(
-              file,
-              file.name,
-              width,
-              height
-            );
-            sourceImage.embedding = embedding;
-            sourceImage.hash = hash;
-
-            addSourceImage(sourceImage);
-            newImages.push(sourceImage);
+            if (sourceImage) {
+              newImages.push(sourceImage);
+            }
           } catch (error) {
             console.error(`Failed to process ${file.name}:`, error);
             addNotification('error', `Failed to process ${file.name}`);
@@ -73,29 +87,59 @@ export const ImportStage = () => {
         }
 
         if (newImages.length > 0) {
+          addSourceImages(newImages);
+          logDev('import', 'processed images', newImages.length);
+          logDev(
+            'import',
+            'store image count',
+            Object.keys(useProjectStore.getState().sourceImages).length
+          );
           addNotification(
             'success',
             `Imported ${newImages.length} image${newImages.length !== 1 ? 's' : ''}`
           );
         }
+
+        return newImages.length;
       } finally {
         setIsLoading(false);
       }
     },
-    [addSourceImage, addNotification]
+    [addNotification, addSourceImages, logDev, processImportedFile]
   );
 
-  const handleFileSelect = (event: React.ChangeEvent<HTMLInputElement>) => {
-    importImages(event.target.files);
-    if (fileInputRef.current) {
-      fileInputRef.current.value = '';
+  const handleFileSelect = async (event: React.ChangeEvent<HTMLInputElement>) => {
+    const files = Array.from(event.currentTarget.files ?? []);
+    logDev('picker', 'selected files', files.length);
+    logDev('picker', 'normalized files', files.length);
+
+    try {
+      const processedCount = await importImages(files);
+      logDev('picker', 'processed images', processedCount);
+      logDev(
+        'picker',
+        'store image count',
+        Object.keys(useProjectStore.getState().sourceImages).length
+      );
+    } finally {
+      event.currentTarget.value = '';
     }
   };
 
-  const handleFolderSelect = (event: React.ChangeEvent<HTMLInputElement>) => {
-    importImages(event.target.files);
-    if (folderInputRef.current) {
-      folderInputRef.current.value = '';
+  const handleFolderSelect = async (event: React.ChangeEvent<HTMLInputElement>) => {
+    const files = Array.from(event.currentTarget.files ?? []);
+    logDev('folder', 'selected files', files.length);
+
+    try {
+      const processedCount = await importImages(files);
+      logDev('folder', 'processed images', processedCount);
+      logDev(
+        'folder',
+        'store image count',
+        Object.keys(useProjectStore.getState().sourceImages).length
+      );
+    } finally {
+      event.currentTarget.value = '';
     }
   };
 
@@ -111,23 +155,27 @@ export const ImportStage = () => {
     setIsDragOver(false);
   }, []);
 
-  const handleDrop = useCallback((event: React.DragEvent) => {
+  const handleDrop = useCallback(async (event: React.DragEvent) => {
     event.preventDefault();
     event.stopPropagation();
     setIsDragOver(false);
 
-    const files = event.dataTransfer.files;
-    if (files && files.length > 0) {
-      importImages(files);
-    }
-  }, [importImages]);
+    const files = Array.from(event.dataTransfer.files ?? []);
+    logDev('drop', 'selected files', files.length);
+
+    const processedCount = await importImages(files);
+    logDev('drop', 'processed images', processedCount);
+    logDev(
+      'drop',
+      'store image count',
+      Object.keys(useProjectStore.getState().sourceImages).length
+    );
+  }, [importImages, logDev]);
 
   const handleRemoveImage = (id: string) => {
     removeSourceImage(id);
     addNotification('info', 'Image removed');
   };
-
-  const images = getSourceImages();
 
   return (
     <div className="space-y-6">
@@ -185,6 +233,8 @@ export const ImportStage = () => {
           <input
             ref={folderInputRef}
             type="file"
+            multiple
+            accept={SUPPORTED_FORMATS.join(',')}
             {...{ webkitdirectory: 'true', mozdirectory: 'true' } as any}
             onChange={handleFolderSelect}
             className="hidden"
@@ -208,15 +258,19 @@ export const ImportStage = () => {
             {images.map((image) => (
               <div key={image.id} className="group relative rounded-lg overflow-hidden bg-secondary border border-border hover:border-primary transition-colors">
                 <div className="aspect-square bg-black flex items-center justify-center overflow-hidden">
-                  <img
-                    src={URL.createObjectURL(image.originalFile)}
-                    alt={image.fileName}
-                    className="w-full h-full object-cover"
-                    onLoad={(e) => {
-                      const img = e.currentTarget;
-                      URL.revokeObjectURL(img.src);
-                    }}
-                  />
+                  {typeof image.previewUrl === 'string' && image.previewUrl ? (
+                    <img
+                      src={image.previewUrl}
+                      alt={image.fileName}
+                      className="w-full h-full object-cover"
+                    />
+                  ) : (
+                    <div className="flex h-full w-full items-center justify-center bg-muted text-muted-foreground p-2 text-center">
+                      <span className="text-xs font-medium">
+                        Preview unavailable
+                      </span>
+                    </div>
+                  )}
                 </div>
 
                 <div className="absolute inset-0 bg-black/50 opacity-0 group-hover:opacity-100 transition-opacity flex flex-col items-center justify-center gap-2">
@@ -242,7 +296,11 @@ export const ImportStage = () => {
           <div className="mt-4 p-4 rounded-lg bg-secondary/50 border border-border">
             <p className="text-sm text-muted-foreground">
               <strong>{images.length}</strong> images ready •{' '}
-              <strong>{(images.reduce((sum, img) => sum + img.originalFile.size, 0) / 1024 / 1024).toFixed(1)} MB</strong> total
+              <strong>{(
+                images.reduce((sum, img) => {
+                  return sum + (img.originalFile instanceof Blob ? img.originalFile.size : 0);
+                }, 0) / 1024 / 1024
+              ).toFixed(1)} MB</strong> total
             </p>
           </div>
         </div>

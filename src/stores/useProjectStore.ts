@@ -17,6 +17,7 @@ interface ProjectStore extends ProjectState {
   
   // Source images
   addSourceImage: (image: SourceImage) => void;
+  addSourceImages: (images: SourceImage[]) => void;
   removeSourceImage: (id: string) => void;
   updateSourceImage: (id: string, updates: Partial<SourceImage>) => void;
   getSourceImages: () => SourceImage[];
@@ -63,9 +64,28 @@ export const useProjectStore = create<ProjectStore>()(
             sourceImages: { ...state.sourceImages, [image.id]: image },
             lastModified: new Date(),
           })),
+
+        addSourceImages: (images: SourceImage[]) =>
+          set((state) => ({
+            ...state,
+            sourceImages: {
+              ...state.sourceImages,
+              ...Object.fromEntries(images.map((image) => [image.id, image])),
+            },
+            lastModified: new Date(),
+          })),
         
         removeSourceImage: (id: string) =>
           set((state) => {
+            const imageToRemove = state.sourceImages[id];
+            if (imageToRemove?.previewUrl) {
+              try {
+                URL.revokeObjectURL(imageToRemove.previewUrl);
+              } catch (error) {
+                console.warn('Failed to revoke preview URL', error);
+              }
+            }
+
             const { [id]: _, ...rest } = state.sourceImages;
             return { ...state, sourceImages: rest, lastModified: new Date() };
           }),
@@ -163,6 +183,20 @@ export const useProjectStore = create<ProjectStore>()(
       }),
       {
         name: 'dataset-creator-project',
+        version: 1,
+        partialize: (state) => {
+          const { sourceImages, ...persistedState } = state;
+          return persistedState;
+        },
+        migrate: (persistedState: any, version) => {
+          if (version === 0) {
+            return {
+              ...(persistedState as any),
+              sourceImages: {},
+            };
+          }
+          return persistedState;
+        },
       }
     )
   )

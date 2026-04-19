@@ -19,6 +19,7 @@ export interface SourceImage {
   width: number;
   height: number;
   mimeType: string;
+  previewUrl?: string;
   thumbnail?: Blob;
   embedding?: Float32Array;
   hash?: string;
@@ -134,13 +135,20 @@ export interface ProjectStageState {
 
 // ============ FACTORY FUNCTIONS ============
 
-export const createSourceImage = (file: Blob, fileName: string, width: number, height: number): SourceImage => ({
+export const createSourceImage = (
+  file: Blob,
+  fileName: string,
+  width: number,
+  height: number,
+  previewUrl?: string
+): SourceImage => ({
   id: uuidv4(),
   originalFile: file,
   fileName,
   width,
   height,
   mimeType: file.type,
+  previewUrl,
   createdAt: new Date(),
 });
 

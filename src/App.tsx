@@ -7,6 +7,7 @@ import { SimilarityReviewStage } from './components/stages/SimilarityReviewStage
 import { CleanupStage } from './components/stages/CleanupStage'
 import { CropStage } from './components/stages/CropStage'
 import { AugmentationStage } from './components/stages/AugmentationStage'
+import { FinalReviewStage } from './components/stages/FinalReviewStage'
 import './App.css'
 
 function App() {
@@ -106,7 +107,8 @@ function App() {
             {currentStage === 'clean' && <CleanupStage />}
             {currentStage === 'crop' && <CropStage />}
             {currentStage === 'augment' && <AugmentationStage />}
-            {!['import', 'select', 'clean', 'crop', 'augment'].includes(currentStage) && (
+            {currentStage === 'review' && <FinalReviewStage />}
+            {!['import', 'select', 'clean', 'crop', 'augment', 'review'].includes(currentStage) && (
               <div className="h-96 flex items-center justify-center rounded-lg border-2 border-dashed border-border bg-secondary/50">
                 <p className="text-muted-foreground text-center">
                   Stage: <span className="font-semibold">{STAGE_LABELS[currentStage]}</span>

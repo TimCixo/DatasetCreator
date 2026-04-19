@@ -5,6 +5,7 @@ import { STAGE_LABELS, STAGES } from './lib/constants'
 import { ImportStage } from './components/stages/ImportStage'
 import { SimilarityReviewStage } from './components/stages/SimilarityReviewStage'
 import { CleanupStage } from './components/stages/CleanupStage'
+import { CropStage } from './components/stages/CropStage'
 import './App.css'
 
 function App() {
@@ -102,7 +103,8 @@ function App() {
             {currentStage === 'import' && <ImportStage />}
             {currentStage === 'select' && <SimilarityReviewStage />}
             {currentStage === 'clean' && <CleanupStage />}
-            {!['import', 'select', 'clean'].includes(currentStage) && (
+            {currentStage === 'crop' && <CropStage />}
+            {!['import', 'select', 'clean', 'crop'].includes(currentStage) && (
               <div className="h-96 flex items-center justify-center rounded-lg border-2 border-dashed border-border bg-secondary/50">
                 <p className="text-muted-foreground text-center">
                   Stage: <span className="font-semibold">{STAGE_LABELS[currentStage]}</span>

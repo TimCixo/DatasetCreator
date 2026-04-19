@@ -47,6 +47,82 @@ The app follows an 8-stage pipeline:
 7. **Auto-Tag Images** → Add tags with dataset keyword always first
 8. **Export Dataset** → Save as PNG + TXT pairs
 
+## 📋 Detailed Requirements
+
+### Import Stage Requirements
+
+#### Inputs
+
+Support all of the following import methods:
+
+* selecting **multiple individual image files**
+* selecting an **entire folder**
+* **drag-and-drop import** onto a visible dropzone
+
+#### Drag-and-drop UX
+
+The import screen must contain a clearly visible drop area with the text:
+
+**Import Images**
+**Select individual files or an entire folder to begin**
+
+The user must be able to drag and drop:
+
+* multiple image files
+* a whole folder, when supported by the browser
+* mixed batches of images
+
+The dropzone must provide clear visual feedback on hover / drag-over / invalid drop.
+
+#### File selection behavior
+
+The file picker must support:
+
+* selecting **multiple files at once**
+* selecting a **folder**
+* adding more files later without overwriting the existing imported set unless the user explicitly chooses to replace it
+
+It is a bug if the app only imports **one file** when the user selects multiple files or a folder.
+This must be fixed.
+
+#### Navigation requirement
+
+After at least one valid image has been imported, the user must be able to proceed to the **next stage**.
+
+Requirements:
+
+* the **Next** button must exist on the import stage
+* it must become enabled once valid images are loaded
+* the user must not get stuck on the import screen after successful import
+
+#### Gallery
+
+Display imported items in a **masonry grid**.
+
+The gallery must support:
+
+* reorder
+* add more items later
+* remove items
+* multi-select
+* shift-select
+* bulk actions
+
+#### Image pipeline rule
+
+Imported images are source assets.
+Final exported images must always be **PNG**.
+
+### Import-stage issues that must be fixed
+
+The current implementation has the following unacceptable problems:
+
+1. There is no working **drag-and-drop import** on the import area.
+2. Selecting **multiple images** or an **entire folder** imports only one file.
+3. The user cannot proceed to the **next stage** after import.
+
+These issues must be treated as **blocking bugs** and fixed before considering the import stage complete.
+
 ## 💾 Storage
 
 - **Browser Storage**: IndexedDB for all project data

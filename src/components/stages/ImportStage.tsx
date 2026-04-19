@@ -11,15 +11,16 @@ const SUPPORTED_FORMATS = ['image/jpeg', 'image/png', 'image/webp', 'image/gif']
 
 export const ImportStage = () => {
   const {
-
     addSourceImage,
     removeSourceImage,
     getSourceImages,
+    setCurrentStage,
   } = useProjectStore();
 
   const { addNotification } = useUIStore();
   
   const [isLoading, setIsLoading] = useState(false);
+  const [isDragOver, setIsDragOver] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const folderInputRef = useRef<HTMLInputElement>(null);
 
@@ -98,6 +99,29 @@ export const ImportStage = () => {
     }
   };
 
+  const handleDragOver = useCallback((event: React.DragEvent) => {
+    event.preventDefault();
+    event.stopPropagation();
+    setIsDragOver(true);
+  }, []);
+
+  const handleDragLeave = useCallback((event: React.DragEvent) => {
+    event.preventDefault();
+    event.stopPropagation();
+    setIsDragOver(false);
+  }, []);
+
+  const handleDrop = useCallback((event: React.DragEvent) => {
+    event.preventDefault();
+    event.stopPropagation();
+    setIsDragOver(false);
+
+    const files = event.dataTransfer.files;
+    if (files && files.length > 0) {
+      importImages(files);
+    }
+  }, [importImages]);
+
   const handleRemoveImage = (id: string) => {
     removeSourceImage(id);
     addNotification('info', 'Image removed');
@@ -108,7 +132,16 @@ export const ImportStage = () => {
   return (
     <div className="space-y-6">
       {/* Upload Section */}
-      <div className="rounded-lg border border-dashed border-border bg-card p-8">
+      <div 
+        className={`rounded-lg border-2 border-dashed transition-colors ${
+          isDragOver 
+            ? 'border-primary bg-primary/5' 
+            : 'border-border bg-card hover:border-primary/50'
+        } p-8`}
+        onDragOver={handleDragOver}
+        onDragLeave={handleDragLeave}
+        onDrop={handleDrop}
+      >
         <div className="text-center">
           <Upload className="mx-auto h-12 w-12 text-muted-foreground mb-4" />
           <h3 className="text-lg font-semibold mb-2">Import Images</h3>
@@ -116,7 +149,7 @@ export const ImportStage = () => {
             Select individual files or an entire folder to begin
           </p>
           
-          <div className="flex gap-4 justify-center">
+          <div className="flex gap-4 justify-center mb-4">
             <button
               onClick={() => fileInputRef.current?.click()}
               disabled={isLoading}
@@ -134,6 +167,12 @@ export const ImportStage = () => {
             </button>
           </div>
 
+          {isDragOver && (
+            <p className="text-sm text-primary font-medium mb-4">
+              Drop files here to import
+            </p>
+          )}
+
           <input
             ref={fileInputRef}
             type="file"
@@ -147,7 +186,6 @@ export const ImportStage = () => {
             ref={folderInputRef}
             type="file"
             {...{ webkitdirectory: 'true', mozdirectory: 'true' } as any}
-            accept={SUPPORTED_FORMATS.join(',')}
             onChange={handleFolderSelect}
             className="hidden"
           />
@@ -207,6 +245,18 @@ export const ImportStage = () => {
               <strong>{(images.reduce((sum, img) => sum + img.originalFile.size, 0) / 1024 / 1024).toFixed(1)} MB</strong> total
             </p>
           </div>
+        </div>
+      )}
+
+      {/* Next Button */}
+      {images.length > 0 && (
+        <div className="flex justify-center">
+          <button
+            onClick={() => setCurrentStage('select')}
+            className="px-6 py-3 bg-primary text-primary-foreground rounded-lg hover:opacity-90 transition-opacity font-semibold text-lg"
+          >
+            Proceed to Remove Duplicates →
+          </button>
         </div>
       )}
 

@@ -7,6 +7,9 @@ import { AlertCircle, ChevronDown, Trash2 } from 'lucide-react';
 
 export const SimilarityReviewStage = () => {
   const sourceImages = useProjectStore((state) => state.sourceImages);
+  const cleanupStageState = useProjectStore(
+    (state) => (state.stageState.clean as { sourceImageIds?: string[]; workingEdits?: Record<string, unknown> } | undefined) ?? {}
+  );
   const removeSourceImage = useProjectStore((state) => state.removeSourceImage);
   const setStageState = useProjectStore((state) => state.setStageState);
   const setCurrentStage = useProjectStore((state) => state.setCurrentStage);
@@ -106,9 +109,15 @@ export const SimilarityReviewStage = () => {
     if (import.meta.env.DEV) {
       console.log(`[cleanup-transition] remaining images: ${remainingImageIds.length}`);
       console.log(`[cleanup-transition] writing cleanup input set: ${remainingImageIds.length}`);
+      console.log(
+        `[cleanup-transition] preserving existing cleanup working edits: ${
+          Object.keys(cleanupStageState.workingEdits ?? {}).length
+        }`
+      );
     }
 
     setStageState('clean', {
+      ...cleanupStageState,
       sourceImageIds: remainingImageIds,
     });
     setCurrentStage('clean');

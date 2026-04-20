@@ -17,6 +17,22 @@ interface CropState {
   resizingHandle: string | null;
 }
 
+type CleanupWorkingEdit = {
+  blob: Blob;
+  previewUrl: string;
+  width: number;
+  height: number;
+};
+
+type CleanupStageState = {
+  sourceImageIds?: string[];
+  workingEdits?: Record<string, CleanupWorkingEdit>;
+};
+
+type CropStageState = {
+  workingFrames?: Record<string, CropState>;
+};
+
 type PanState = {
   active: boolean;
   startX: number;
@@ -102,10 +118,30 @@ const pointInsideHandle = (
   );
 };
 
+const getFrameOverlayStyle = (
+  frame: CropFrame,
+  imageWidth: number,
+  imageHeight: number
+) => ({
+  left: `${(frame.x / imageWidth) * 100}%`,
+  top: `${(frame.y / imageHeight) * 100}%`,
+  width: `${(frame.width / imageWidth) * 100}%`,
+  height: `${(frame.height / imageHeight) * 100}%`,
+});
+
 export const CropStage = () => {
   const sourceImages = useProjectStore((state) => Object.values(state.sourceImages));
   const addDatasetItem = useProjectStore((state) => state.addDatasetItem);
+  const removeDatasetItem = useProjectStore((state) => state.removeDatasetItem);
+  const datasetItems = useProjectStore((state) => Object.values(state.datasetItems));
   const setCurrentStage = useProjectStore((state) => state.setCurrentStage);
+  const setStageState = useProjectStore((state) => state.setStageState);
+  const cleanupStageState = useProjectStore(
+    (state) => (state.stageState.clean as CleanupStageState | undefined) ?? {}
+  );
+  const cropStageState = useProjectStore(
+    (state) => (state.stageState.crop as CropStageState | undefined) ?? {}
+  );
   const { addNotification } = useUIStore();
 
   const canvasRef = useRef<HTMLCanvasElement>(null);
@@ -136,33 +172,51 @@ export const CropStage = () => {
   const [finalizedImageIds, setFinalizedImageIds] = useState<Set<string>>(new Set());
   const [isFrameDropdownOpen, setIsFrameDropdownOpen] = useState(false);
 
-  const selectedIndex = useMemo(
-    () => (selectedImageId ? sourceImages.findIndex((image) => image.id === selectedImageId) : -1),
-    [selectedImageId, sourceImages]
+  const effectiveSourceImages = useMemo(
+    () =>
+      sourceImages.map((image) => {
+        const workingEdit = cleanupStageState.workingEdits?.[image.id];
+        return {
+          ...image,
+          originalFile: workingEdit?.blob ?? image.originalFile,
+          previewUrl: workingEdit?.previewUrl ?? image.previewUrl,
+          width: workingEdit?.width ?? image.width,
+          height: workingEdit?.height ?? image.height,
+        };
+      }),
+    [cleanupStageState.workingEdits, sourceImages]
   );
-  const selectedImage = selectedIndex >= 0 ? sourceImages[selectedIndex] : null;
+
+  const selectedIndex = useMemo(
+    () => (selectedImageId ? effectiveSourceImages.findIndex((image) => image.id === selectedImageId) : -1),
+    [effectiveSourceImages, selectedImageId]
+  );
+  const selectedImage = selectedIndex >= 0 ? effectiveSourceImages[selectedIndex] : null;
   const isEditorMode = Boolean(selectedImage);
 
   const imageFrameCounts = useMemo(() => {
     const counts: Record<string, number> = {};
-    for (const image of sourceImages) {
-      counts[image.id] = cropSessionsRef.current[image.id]?.frames.length ?? 0;
+    for (const image of effectiveSourceImages) {
+      counts[image.id] =
+        cropStageState.workingFrames?.[image.id]?.frames.length ??
+        cropSessionsRef.current[image.id]?.frames.length ??
+        0;
     }
     return counts;
-  }, [sourceImages, sessionVersion]);
+  }, [cropStageState.workingFrames, effectiveSourceImages, sessionVersion]);
 
   const nearbyImages = useMemo(() => {
     if (!selectedImageId) {
       return [];
     }
 
-    const index = sourceImages.findIndex((image) => image.id === selectedImageId);
+    const index = effectiveSourceImages.findIndex((image) => image.id === selectedImageId);
     if (index === -1) {
       return [];
     }
 
-    return sourceImages.filter((_, imageIndex) => Math.abs(imageIndex - index) <= 2);
-  }, [selectedImageId, sourceImages]);
+    return effectiveSourceImages.filter((_, imageIndex) => Math.abs(imageIndex - index) <= 2);
+  }, [effectiveSourceImages, selectedImageId]);
 
   const frameEntries = useMemo(
     () =>
@@ -296,18 +350,30 @@ export const CropStage = () => {
       cropSessionsRef.current[selectedImage.id] = nextState;
       setCropState(nextState);
       setSessionVersion((version) => version + 1);
+      setStageState('crop', {
+        ...cropStageState,
+        workingFrames: {
+          ...(cropStageState.workingFrames ?? {}),
+          [selectedImage.id]: nextState,
+        },
+      });
+
+      if (import.meta.env.DEV) {
+        console.log(`[crop] crop frame state updated: ${selectedImage.id} -> ${nextState.frames.length} frame(s)`);
+        console.log(`[crop] crop gallery preview/state refreshed: ${selectedImage.id}`);
+      }
     },
-    [selectedImage]
+    [cropStageState, selectedImage, setStageState]
   );
 
   const openImageInEditor = useCallback(
     (imageId: string) => {
-      const image = sourceImages.find((candidate) => candidate.id === imageId);
+      const image = effectiveSourceImages.find((candidate) => candidate.id === imageId);
       if (!image) {
         return;
       }
 
-      const nextState = cropSessionsRef.current[image.id] ?? {
+      const nextState = cropStageState.workingFrames?.[image.id] ?? cropSessionsRef.current[image.id] ?? {
         frames: [],
         selectedFrameId: null,
         resizingHandle: null,
@@ -327,9 +393,16 @@ export const CropStage = () => {
         console.log(
           `[crop] frame list: ${nextState.frames.map((frame, index) => `${index + 1}:${frame.id}`).join(', ') || 'none'}`
         );
+        console.log(
+          `[crop] current crop working state per image: ${JSON.stringify(
+            Object.fromEntries(
+              Object.entries(cropStageState.workingFrames ?? {}).map(([id, state]) => [id, state.frames.length])
+            )
+          )}`
+        );
       }
     },
-    [fitImageToWorkspace, sourceImages]
+    [cropStageState.workingFrames, effectiveSourceImages, fitImageToWorkspace]
   );
 
   const closeEditor = useCallback(() => {
@@ -490,8 +563,11 @@ export const CropStage = () => {
   useEffect(() => {
     if (import.meta.env.DEV) {
       console.log(`[crop] mode: ${isEditorMode ? 'editor' : 'gallery'}`);
+      console.log(
+        `[crop] crop working frame count per image in gallery mode: ${JSON.stringify(imageFrameCounts)}`
+      );
     }
-  }, [isEditorMode]);
+  }, [imageFrameCounts, isEditorMode]);
 
   const handleCanvasMouseDown = (event: React.MouseEvent<HTMLCanvasElement>) => {
     if (!selectedImage) {
@@ -659,16 +735,26 @@ export const CropStage = () => {
   const finalizeCrops = useCallback(async () => {
     let createdCount = 0;
     const finalizedImages = new Set<string>();
+    const cleanupEdits = cleanupStageState.workingEdits ?? {};
+    const workingFrames = cropStageState.workingFrames ?? {};
 
-    for (const image of sourceImages) {
-      const session = cropSessionsRef.current[image.id];
+    for (const item of datasetItems) {
+      if (item.type === 'crop') {
+        removeDatasetItem(item.id);
+      }
+    }
+
+    for (const image of effectiveSourceImages) {
+      const session = workingFrames[image.id] ?? cropSessionsRef.current[image.id];
       if (!session || session.frames.length === 0) {
         continue;
       }
 
+      const cropSource = cleanupEdits[image.id]?.blob ?? image.originalFile;
+
       for (const frame of session.frames) {
         const croppedBlob = await cropImage(
-          image.originalFile,
+          cropSource,
           frame.x,
           frame.y,
           frame.width,
@@ -692,8 +778,17 @@ export const CropStage = () => {
     }
 
     setFinalizedImageIds(finalizedImages);
+    if (import.meta.env.DEV) {
+      console.log(`[augment-transition] cleanup-edited images materialized: ${Object.keys(cleanupEdits).length}`);
+      console.log(`[augment-transition] crop-defined outputs materialized: ${createdCount}`);
+      console.log(
+        `[augment-transition] final derived input count received by Augment Dataset: ${
+          useProjectStore.getState().getDatasetItems(false).length
+        }`
+      );
+    }
     return createdCount;
-  }, [addDatasetItem, sourceImages]);
+  }, [addDatasetItem, cleanupStageState.workingEdits, cropStageState.workingFrames, datasetItems, effectiveSourceImages, removeDatasetItem]);
 
   const handleFinishCrop = async () => {
     try {
@@ -703,6 +798,9 @@ export const CropStage = () => {
         return;
       }
 
+      if (import.meta.env.DEV) {
+        console.log('[crop] Finish Crop transition target stage: augment');
+      }
       addNotification('success', `Created ${createdCount} crop${createdCount !== 1 ? 's' : ''}`);
       setCurrentStage('augment');
     } catch (error) {
@@ -739,30 +837,65 @@ export const CropStage = () => {
             </button>
           </div>
 
-          <div className="p-6 grid grid-cols-2 md:grid-cols-3 xl:grid-cols-4 gap-4 overflow-y-auto">
-            {sourceImages.map((image, index) => (
-              <button
-                key={image.id}
-                onClick={() => openImageInEditor(image.id)}
-                className="rounded-lg border border-border bg-background overflow-hidden hover:border-primary/50 transition-colors text-left"
-              >
-                <div className="aspect-square bg-black flex items-center justify-center overflow-hidden">
-                  {image.previewUrl ? (
-                    <img src={image.previewUrl} alt={image.fileName} className="w-full h-full object-cover" />
-                  ) : (
-                    <span className="text-xs text-muted-foreground">{image.width} x {image.height}</span>
-                  )}
-                </div>
-                <div className="p-3 flex items-center justify-between gap-2">
-                  <div>
-                    <p className="font-medium text-sm">Image #{index + 1}</p>
-                    <p className="text-xs text-muted-foreground truncate">{image.fileName}</p>
-                    <p className="text-xs text-muted-foreground">{imageFrameCounts[image.id] ?? 0} frame(s)</p>
+          <div className="p-6 grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 gap-4 overflow-y-auto">
+            {effectiveSourceImages.map((image, index) => {
+              const frameState =
+                cropStageState.workingFrames?.[image.id] ?? cropSessionsRef.current[image.id] ?? null;
+              const frameCount = frameState?.frames.length ?? 0;
+
+              if (import.meta.env.DEV) {
+                console.log(`[crop] whether crop gallery preview is built from remembered crop state: ${image.id} -> ${frameCount > 0}`);
+                console.log(`[crop] whether gallery overlay reflects frame count correctly: ${image.id} -> ${frameCount}`);
+              }
+
+              return (
+                <button
+                  key={image.id}
+                  onClick={() => openImageInEditor(image.id)}
+                  className="group relative rounded-lg overflow-hidden bg-secondary border border-border hover:border-primary transition-colors text-left"
+                >
+                  <div className="relative aspect-square bg-black flex items-center justify-center overflow-hidden">
+                    {(cleanupStageState.workingEdits?.[image.id]?.previewUrl ?? image.previewUrl) ? (
+                      <img
+                        src={cleanupStageState.workingEdits?.[image.id]?.previewUrl ?? image.previewUrl}
+                        alt={image.fileName}
+                        className="w-full h-full object-cover"
+                      />
+                    ) : (
+                      <span className="text-xs text-muted-foreground">{image.width} x {image.height}</span>
+                    )}
+
+                    {frameState?.frames.map((frame, frameIndex) => (
+                      <div
+                        key={frame.id}
+                        className="absolute rounded-sm pointer-events-none"
+                        style={{
+                          ...getFrameOverlayStyle(frame, image.width, image.height),
+                          border: `2px solid ${getFrameColor(frameIndex)}`,
+                          backgroundColor: hexToRgba(getFrameColor(frameIndex), 0.14),
+                          boxShadow: `0 0 0 1px ${hexToRgba(getFrameColor(frameIndex), 0.35)} inset`,
+                        }}
+                      />
+                    ))}
+
+                    <div className="absolute inset-0 bg-black/20 opacity-0 group-hover:opacity-100 transition-opacity" />
+                    <div className="absolute bottom-0 left-0 right-0 bg-gradient-to-t from-black/80 via-black/45 to-transparent p-3">
+                      <div className="flex items-end justify-between gap-2">
+                        <div>
+                          <p className="text-sm font-medium text-white">Image #{index + 1}</p>
+                          <p className="text-xs text-gray-300">
+                            {frameCount === 0 ? 'No crop frames' : `Frames: ${frameCount}`}
+                          </p>
+                        </div>
+                        {finalizedImageIds.has(image.id) && (
+                          <Check size={16} className="text-green-400 shrink-0" />
+                        )}
+                      </div>
+                    </div>
                   </div>
-                  {finalizedImageIds.has(image.id) && <Check size={16} className="text-green-500 shrink-0" />}
-                </div>
-              </button>
-            ))}
+                </button>
+              );
+            })}
           </div>
         </>
       ) : (

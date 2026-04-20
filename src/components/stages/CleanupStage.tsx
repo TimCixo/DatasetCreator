@@ -14,30 +14,31 @@ import {
   type BrushSettings,
   type CanvasState,
 } from '../../services/cleanup/canvasEditor';
-import { type DatasetItem, type SourceImage } from '../../types';
+import { type SourceImage } from '../../types';
 import { AlertCircle, ArrowLeft, Check, Droplet, Eraser, Pencil, Redo2, Undo2 } from 'lucide-react';
 
-type CleanupImage =
-  | {
-      kind: 'dataset';
-      id: string;
-      blob: Blob;
-      width: number;
-      height: number;
-      label: string;
-      sourceImageId?: string;
-      previewUrl?: string;
-    }
-  | {
-      kind: 'source';
-      id: string;
-      blob: Blob;
-      width: number;
-      height: number;
-      label: string;
-      sourceImageId: string;
-      previewUrl?: string;
-    };
+type CleanupWorkingEdit = {
+  blob: Blob;
+  previewUrl: string;
+  width: number;
+  height: number;
+};
+
+type CleanupStageState = {
+  sourceImageIds?: string[];
+  workingEdits?: Record<string, CleanupWorkingEdit>;
+};
+
+type CleanupImage = {
+  id: string;
+  blob: Blob;
+  width: number;
+  height: number;
+  label: string;
+  sourceImageId: string;
+  previewUrl?: string;
+  hasWorkingEdit: boolean;
+};
 
 type PanState = {
   active: boolean;
@@ -51,16 +52,12 @@ const MIN_ZOOM = 0.1;
 const MAX_ZOOM = 8;
 
 export const CleanupStage = () => {
-  const datasetItems = useProjectStore((state) =>
-    Object.values(state.datasetItems).filter((item) => !item.deleted)
-  );
   const sourceImages = useProjectStore((state) => state.sourceImages);
   const cleanupStageState = useProjectStore(
-    (state) => state.stageState.clean as { sourceImageIds?: string[] } | undefined
+    (state) => (state.stageState.clean as CleanupStageState | undefined) ?? {}
   );
   const setCurrentStage = useProjectStore((state) => state.setCurrentStage);
-  const updateDatasetItem = useProjectStore((state) => state.updateDatasetItem);
-  const updateSourceImage = useProjectStore((state) => state.updateSourceImage);
+  const setStageState = useProjectStore((state) => state.setStageState);
   const { addNotification } = useUIStore();
 
   const canvasRef = useRef<HTMLCanvasElement>(null);
@@ -90,37 +87,27 @@ export const CleanupStage = () => {
     originX: 0,
     originY: 0,
   });
-  const [persistedImageIds, setPersistedImageIds] = useState<Set<string>>(new Set());
   const [sessionVersion, setSessionVersion] = useState(0);
 
   const items = useMemo<CleanupImage[]>(() => {
-    if (datasetItems.length > 0) {
-      return datasetItems.map((item: DatasetItem) => ({
-        kind: 'dataset',
-        id: item.id,
-        blob: item.imageData,
-        width: item.width,
-        height: item.height,
-        label: `${item.type} - ${item.aspectRatio}`,
-        sourceImageId: item.sourceImageId,
-      }));
-    }
-
     const preferredIds = cleanupStageState?.sourceImageIds ?? Object.keys(sourceImages);
     return preferredIds
       .map((id) => sourceImages[id])
       .filter((image): image is SourceImage => Boolean(image))
-      .map((image) => ({
-        kind: 'source',
+      .map((image) => {
+        const workingEdit = cleanupStageState.workingEdits?.[image.id];
+        return {
         id: image.id,
         sourceImageId: image.id,
-        blob: image.originalFile,
-        width: image.width,
-        height: image.height,
+        blob: workingEdit?.blob ?? image.originalFile,
+        width: workingEdit?.width ?? image.width,
+        height: workingEdit?.height ?? image.height,
         label: image.fileName,
-        previewUrl: image.previewUrl,
-      }));
-  }, [cleanupStageState, datasetItems, sourceImages]);
+        previewUrl: workingEdit?.previewUrl ?? image.previewUrl,
+        hasWorkingEdit: Boolean(workingEdit),
+      };
+      });
+  }, [cleanupStageState, sourceImages]);
 
   const selectedItem = items.find((item) => item.id === selectedImageId) ?? null;
   const currentSession = selectedImageId ? sessionsRef.current[selectedImageId] ?? null : null;
@@ -204,47 +191,46 @@ export const CleanupStage = () => {
     [renderImageData]
   );
 
-  const persistImageData = useCallback(
-    async (item: CleanupImage, imageData: ImageData) => {
+  const storeWorkingCleanupEdit = useCallback(
+    async (imageId: string, imageData: ImageData) => {
       const blob = await imageDataToBlob(imageData);
+      const nextPreviewUrl = URL.createObjectURL(blob);
+      const latestCleanState =
+        (useProjectStore.getState().stageState.clean as CleanupStageState | undefined) ?? {};
+      const previousPreviewUrl = latestCleanState.workingEdits?.[imageId]?.previewUrl;
 
-      if (item.kind === 'dataset') {
-        updateDatasetItem(item.id, { imageData: blob });
-      } else {
-        const sourceImage = sourceImages[item.id];
-        if (sourceImage?.previewUrl) {
-          try {
-            URL.revokeObjectURL(sourceImage.previewUrl);
-          } catch (error) {
-            console.warn('Failed to revoke previous preview URL', error);
-          }
+      if (previousPreviewUrl) {
+        try {
+          URL.revokeObjectURL(previousPreviewUrl);
+        } catch (error) {
+          console.warn('Failed to revoke previous cleanup preview URL', error);
         }
-
-        updateSourceImage(item.id, {
-          originalFile: blob,
-          previewUrl: URL.createObjectURL(blob),
-        });
       }
 
-      setPersistedImageIds((prev) => new Set(prev).add(item.id));
+      const nextWorkingEdits = {
+        ...(latestCleanState.workingEdits ?? {}),
+        [imageId]: {
+          blob,
+          previewUrl: nextPreviewUrl,
+          width: imageData.width,
+          height: imageData.height,
+        },
+      };
+
+      setStageState('clean', {
+        ...latestCleanState,
+        sourceImageIds: latestCleanState.sourceImageIds ?? Object.keys(sourceImages),
+        workingEdits: nextWorkingEdits,
+      });
 
       if (import.meta.env.DEV) {
-        console.log(`[cleanup] finish-stage persist success: ${item.id}`);
+        console.log(`[cleanup] working edit updated: ${imageId}`);
+        console.log(`[cleanup] current cleanup working state count: ${Object.keys(nextWorkingEdits).length}`);
+        console.log(`[cleanup] gallery preview regenerated from cleanup working state: ${imageId}`);
       }
     },
-    [sourceImages, updateDatasetItem, updateSourceImage]
+    [setStageState, sourceImages]
   );
-
-  const saveAllEdits = useCallback(async () => {
-    for (const item of items) {
-      const session = sessionsRef.current[item.id];
-      if (!session) {
-        continue;
-      }
-
-      await persistImageData(item, getCurrentImageData(session));
-    }
-  }, [items, persistImageData]);
 
   const openImageInEditor = useCallback(
     async (imageId: string) => {
@@ -263,6 +249,11 @@ export const CleanupStage = () => {
         let session = sessionsRef.current[imageId];
 
         if (!session) {
+          if (import.meta.env.DEV) {
+            console.log(
+              `[cleanup] editor open uses ${cleanupStageState.workingEdits?.[imageId] ? 'remembered cleanup blob' : 'original blob'}: ${imageId}`
+            );
+          }
           const imageData = await blobToImageData(item.blob);
           session = createCanvasState(imageData);
           sessionsRef.current[imageId] = session;
@@ -288,7 +279,7 @@ export const CleanupStage = () => {
         }
       }
     },
-    [addNotification, fitImageToWorkspace, items, renderImageData, selectedImageId]
+    [addNotification, cleanupStageState.workingEdits, fitImageToWorkspace, items, renderImageData, selectedImageId]
   );
 
   useEffect(() => {
@@ -305,8 +296,16 @@ export const CleanupStage = () => {
   useEffect(() => {
     if (import.meta.env.DEV) {
       console.log(`[cleanup] images available to clean: ${items.length}`);
+      console.log(
+        `[cleanup] cleanup working state count on stage entry: ${Object.keys(cleanupStageState.workingEdits ?? {}).length}`
+      );
+      console.log(
+        `[cleanup] gallery items built from ${
+          Object.keys(cleanupStageState.workingEdits ?? {}).length > 0 ? 'workingEdits or originals' : 'originals'
+        }`
+      );
     }
-  }, [items.length]);
+  }, [cleanupStageState.workingEdits, items.length]);
 
   useEffect(() => {
     const handleKeyDown = (event: KeyboardEvent) => {
@@ -460,6 +459,7 @@ export const CleanupStage = () => {
     nextState.currentBrushSettings = brushSettings;
     syncSession(selectedImageId, nextState);
     renderImageData(getCurrentImageData(nextState));
+    void storeWorkingCleanupEdit(selectedImageId, getCurrentImageData(nextState));
     strokeDraftRef.current = null;
     setIsDrawing(false);
 
@@ -481,6 +481,7 @@ export const CleanupStage = () => {
     nextState.currentBrushSettings = brushSettings;
     syncSession(selectedImageId, nextState);
     renderImageData(getCurrentImageData(nextState));
+    void storeWorkingCleanupEdit(selectedImageId, getCurrentImageData(nextState));
 
     if (import.meta.env.DEV) {
       console.log(`[cleanup] undo stack length: ${nextState.historyIndex + 1}`);
@@ -499,6 +500,7 @@ export const CleanupStage = () => {
     nextState.currentBrushSettings = brushSettings;
     syncSession(selectedImageId, nextState);
     renderImageData(getCurrentImageData(nextState));
+    void storeWorkingCleanupEdit(selectedImageId, getCurrentImageData(nextState));
 
     if (import.meta.env.DEV) {
       console.log(`[cleanup] undo stack length: ${nextState.historyIndex + 1}`);
@@ -527,12 +529,16 @@ export const CleanupStage = () => {
 
   const handleFinishCleanup = async () => {
     try {
-      await saveAllEdits();
-      addNotification('success', 'Cleanup edits saved');
+      if (import.meta.env.DEV) {
+        console.log(
+          `[cleanup] current cleanup working state count: ${Object.keys(cleanupStageState.workingEdits ?? {}).length}`
+        );
+      }
+      addNotification('success', 'Cleanup working edits saved');
       setCurrentStage('crop');
     } catch (error) {
       console.error('Failed to finish cleanup:', error);
-      addNotification('error', 'Failed to save cleanup edits');
+      addNotification('error', 'Failed to save cleanup working edits');
     }
   };
 
@@ -564,14 +570,14 @@ export const CleanupStage = () => {
             </button>
           </div>
 
-          <div className="p-6 grid grid-cols-2 md:grid-cols-3 xl:grid-cols-4 gap-4 overflow-y-auto">
+          <div className="p-6 grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 gap-4 overflow-y-auto">
             {items.map((item, index) => (
               <button
                 key={item.id}
                 onClick={() => void openImageInEditor(item.id)}
-                className="rounded-lg border border-border bg-background overflow-hidden hover:border-primary/50 transition-colors text-left"
+                className="group relative rounded-lg overflow-hidden bg-secondary border border-border hover:border-primary transition-colors text-left"
               >
-                <div className="aspect-square bg-black flex items-center justify-center overflow-hidden">
+                <div className="relative aspect-square bg-black flex items-center justify-center overflow-hidden">
                   {item.previewUrl ? (
                     <img src={item.previewUrl} alt={item.label} className="w-full h-full object-cover" />
                   ) : (
@@ -579,15 +585,20 @@ export const CleanupStage = () => {
                       {item.width} x {item.height}
                     </span>
                   )}
-                </div>
-                <div className="p-3 flex items-center justify-between gap-2">
-                  <div>
-                    <p className="font-medium text-sm">Image #{index + 1}</p>
-                    <p className="text-xs text-muted-foreground truncate">{item.label}</p>
+                  <div className="absolute inset-0 bg-black/20 opacity-0 group-hover:opacity-100 transition-opacity" />
+                  <div className="absolute bottom-0 left-0 right-0 bg-gradient-to-t from-black/80 via-black/45 to-transparent p-3">
+                    <div className="flex items-end justify-between gap-2">
+                      <div>
+                        <p className="text-sm font-medium text-white">Image #{index + 1}</p>
+                        <p className="text-xs text-gray-300">
+                          {item.hasWorkingEdit ? 'Edited' : 'Not edited'}
+                        </p>
+                      </div>
+                      {item.hasWorkingEdit && (
+                        <Check size={16} className="text-green-400 shrink-0" />
+                      )}
+                    </div>
                   </div>
-                  {persistedImageIds.has(item.id) && (
-                    <Check size={16} className="text-green-500 shrink-0" />
-                  )}
                 </div>
               </button>
             ))}
@@ -599,6 +610,13 @@ export const CleanupStage = () => {
             <div className="flex items-center gap-3">
               <button
                 onClick={() => {
+                  if (import.meta.env.DEV) {
+                    console.log(
+                      `[cleanup] cleanup working state count on stage exit: ${Object.keys(
+                        ((useProjectStore.getState().stageState.clean as CleanupStageState | undefined)?.workingEdits ?? {})
+                      ).length}`
+                    );
+                  }
                   setSelectedImageId(null);
                   strokeDraftRef.current = null;
                   if (import.meta.env.DEV) {

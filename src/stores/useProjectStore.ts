@@ -185,8 +185,16 @@ export const useProjectStore = create<ProjectStore>()(
         name: 'dataset-creator-project',
         version: 1,
         partialize: (state) => {
-          const { sourceImages, ...persistedState } = state;
-          return persistedState;
+          const { sourceImages, cleanupOverlays, ...persistedState } = state;
+          return {
+            ...persistedState,
+            cleanupOverlays: {},
+            stageState: {
+              ...persistedState.stageState,
+              clean: {},
+              crop: {},
+            },
+          };
         },
         migrate: (persistedState: any, version) => {
           if (version === 0) {

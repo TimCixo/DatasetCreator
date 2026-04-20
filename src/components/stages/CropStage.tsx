@@ -793,15 +793,25 @@ export const CropStage = () => {
   const handleFinishCrop = async () => {
     try {
       const createdCount = await finalizeCrops();
-      if (createdCount === 0) {
-        addNotification('warning', 'Create at least one crop frame before finishing');
-        return;
+      const totalFrameCount = Object.values(cropStageState.workingFrames ?? {}).reduce(
+        (sum, state) => sum + state.frames.length,
+        0
+      );
+
+      if (import.meta.env.DEV) {
+        console.log(`[crop] current crop frame count at transition time: ${totalFrameCount}`);
+        console.log(`[crop] whether Crop -> Augment was allowed with zero frames: ${totalFrameCount === 0}`);
       }
 
       if (import.meta.env.DEV) {
         console.log('[crop] Finish Crop transition target stage: augment');
       }
-      addNotification('success', `Created ${createdCount} crop${createdCount !== 1 ? 's' : ''}`);
+      addNotification(
+        'success',
+        createdCount > 0
+          ? `Created ${createdCount} crop${createdCount !== 1 ? 's' : ''}`
+          : 'No crop frames created. Proceeding to augmentation with current images.'
+      );
       setCurrentStage('augment');
     } catch (error) {
       console.error('Failed to finalize crop stage:', error);
@@ -837,7 +847,7 @@ export const CropStage = () => {
             </button>
           </div>
 
-          <div className="p-6 grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 gap-4 overflow-y-auto">
+          <div className="p-6 gallery-masonry overflow-y-auto">
             {effectiveSourceImages.map((image, index) => {
               const frameState =
                 cropStageState.workingFrames?.[image.id] ?? cropSessionsRef.current[image.id] ?? null;
@@ -852,14 +862,14 @@ export const CropStage = () => {
                 <button
                   key={image.id}
                   onClick={() => openImageInEditor(image.id)}
-                  className="group relative rounded-lg overflow-hidden bg-secondary border border-border hover:border-primary transition-colors text-left"
+                  className="gallery-masonry-item group relative rounded-lg overflow-hidden bg-secondary border border-border hover:border-primary transition-colors text-left"
                 >
-                  <div className="relative aspect-square bg-black flex items-center justify-center overflow-hidden">
+                  <div className="relative min-h-[12rem] bg-black flex items-center justify-center overflow-hidden">
                     {(cleanupStageState.workingEdits?.[image.id]?.previewUrl ?? image.previewUrl) ? (
                       <img
                         src={cleanupStageState.workingEdits?.[image.id]?.previewUrl ?? image.previewUrl}
                         alt={image.fileName}
-                        className="w-full h-full object-cover"
+                        className="w-full h-auto object-contain"
                       />
                     ) : (
                       <span className="text-xs text-muted-foreground">{image.width} x {image.height}</span>

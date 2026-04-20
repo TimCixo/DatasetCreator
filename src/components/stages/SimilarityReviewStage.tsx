@@ -218,7 +218,7 @@ export const SimilarityReviewStage = () => {
 
                 {selectedClusterId === cluster.id && (
                   <div className="border-t border-border p-4 bg-secondary/30">
-                    <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 gap-4 mb-4">
+                    <div className="gallery-masonry mb-4">
                       {cluster.imageIds.map((imageId) => {
                         const image = sourceImages[imageId];
                         if (!image) {
@@ -228,14 +228,14 @@ export const SimilarityReviewStage = () => {
                         return (
                           <div
                             key={imageId}
-                            className="group relative rounded-lg overflow-hidden bg-black border border-border"
+                            className="gallery-masonry-item group relative rounded-lg overflow-hidden bg-black border border-border"
                           >
-                            <div className="aspect-square flex items-center justify-center overflow-hidden">
+                            <div className="relative min-h-[12rem] flex items-center justify-center overflow-hidden">
                               {image.previewUrl ? (
                                 <img
                                   src={image.previewUrl}
                                   alt={image.fileName}
-                                  className="w-full h-full object-cover"
+                                  className="w-full h-auto object-contain"
                                 />
                               ) : (
                                 <div className="flex h-full w-full items-center justify-center bg-muted text-muted-foreground p-2 text-center">

@@ -570,16 +570,16 @@ export const CleanupStage = () => {
             </button>
           </div>
 
-          <div className="p-6 grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 gap-4 overflow-y-auto">
+          <div className="p-6 gallery-masonry overflow-y-auto">
             {items.map((item, index) => (
               <button
                 key={item.id}
                 onClick={() => void openImageInEditor(item.id)}
-                className="group relative rounded-lg overflow-hidden bg-secondary border border-border hover:border-primary transition-colors text-left"
+                className="gallery-masonry-item group relative rounded-lg overflow-hidden bg-secondary border border-border hover:border-primary transition-colors text-left"
               >
-                <div className="relative aspect-square bg-black flex items-center justify-center overflow-hidden">
+                <div className="relative min-h-[12rem] bg-black flex items-center justify-center overflow-hidden">
                   {item.previewUrl ? (
-                    <img src={item.previewUrl} alt={item.label} className="w-full h-full object-cover" />
+                    <img src={item.previewUrl} alt={item.label} className="w-full h-auto object-contain" />
                   ) : (
                     <span className="text-xs text-muted-foreground">
                       {item.width} x {item.height}

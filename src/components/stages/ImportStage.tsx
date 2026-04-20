@@ -256,15 +256,16 @@ export const ImportStage = () => {
             </span>
           </div>
 
-          <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 gap-4">
+          <div className="gallery-masonry">
             {images.map((image) => (
-              <div key={image.id} className="group relative rounded-lg overflow-hidden bg-secondary border border-border hover:border-primary transition-colors">
-                <div className="aspect-square bg-black flex items-center justify-center overflow-hidden">
+              <div key={image.id} className="gallery-masonry-item">
+                <div className="group relative rounded-lg overflow-hidden bg-secondary border border-border hover:border-primary transition-colors">
+                  <div className="relative min-h-[12rem] bg-black flex items-center justify-center overflow-hidden">
                   {typeof image.previewUrl === 'string' && image.previewUrl ? (
                     <img
                       src={image.previewUrl}
                       alt={image.fileName}
-                      className="w-full h-full object-cover"
+                      className="w-full h-auto object-contain"
                     />
                   ) : (
                     <div className="flex h-full w-full items-center justify-center bg-muted text-muted-foreground p-2 text-center">
@@ -290,6 +291,7 @@ export const ImportStage = () => {
                   <p className="text-xs text-gray-300">
                     {image.width} × {image.height}
                   </p>
+                  </div>
                 </div>
               </div>
             ))}

@@ -460,19 +460,28 @@ export const AugmentationStage = () => {
       </div>
 
       <div>
-        <div className="flex items-center justify-between mb-4">
+        <div className="flex items-center justify-between mb-4 gap-4">
           <div>
             <h3 className="text-lg font-semibold">Augmentation Gallery</h3>
             <p className="text-sm text-muted-foreground">
               Originals and crop-derived images can both be assigned augmentations.
             </p>
           </div>
-          <div className="text-sm text-muted-foreground">
-            {candidates.length} candidate{candidates.length !== 1 ? 's' : ''}
+          <div className="flex items-center gap-3">
+            <div className="text-sm text-muted-foreground">
+              {candidates.length} candidate{candidates.length !== 1 ? 's' : ''}
+            </div>
+            <button
+              onClick={() => void handleProceedToFinalReview()}
+              disabled={isProcessing}
+              className="inline-flex items-center gap-2 px-4 py-2 rounded-md bg-primary text-primary-foreground hover:opacity-90 disabled:opacity-50 transition-opacity text-sm font-medium"
+            >
+              {isProcessing ? 'Preparing Final Review...' : 'Proceed to Final Review'}
+            </button>
           </div>
         </div>
 
-        <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 gap-4">
+        <div className="gallery-masonry">
           {candidates.map((candidate) => {
             const plannedTypes = plannedTypesByImage.get(candidate.key) ?? [];
             const isSelectedForCurrentType = selectedImageKeys.has(candidate.key);
@@ -485,18 +494,18 @@ export const AugmentationStage = () => {
               <button
                 key={candidate.key}
                 onClick={() => toggleImageSelection(candidate.key)}
-                className={`group relative rounded-lg overflow-hidden border transition-colors text-left ${
+                className={`gallery-masonry-item group relative rounded-lg overflow-hidden border transition-colors text-left ${
                   isSelectedForCurrentType
                     ? 'border-primary bg-primary/5'
                     : 'border-border bg-secondary hover:border-primary/50'
                 }`}
               >
-                <div className="relative aspect-square bg-black flex items-center justify-center overflow-hidden">
+                <div className="relative min-h-[12rem] bg-black flex items-center justify-center overflow-hidden">
                   {candidate.previewUrl ? (
                     <img
                       src={candidate.previewUrl}
                       alt={`Image ${candidate.displayIdentity}`}
-                      className="w-full h-full object-cover"
+                      className="w-full h-auto object-contain"
                     />
                   ) : (
                     <span className="text-xs text-muted-foreground">
@@ -532,14 +541,6 @@ export const AugmentationStage = () => {
           proceeding to Final Review.
         </p>
       </div>
-
-      <button
-        onClick={() => void handleProceedToFinalReview()}
-        disabled={isProcessing}
-        className="w-full px-6 py-3 bg-primary text-primary-foreground rounded-md hover:opacity-90 disabled:opacity-50 transition-opacity font-medium"
-      >
-        {isProcessing ? 'Preparing Final Review...' : 'Proceed to Final Review'}
-      </button>
     </div>
   );
 };

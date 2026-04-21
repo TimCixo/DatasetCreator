@@ -154,13 +154,19 @@ The dataset keyword is handled at export time, so editable Stage 7 tags stay cle
 
 ## 🌐 Deployment
 
-DatasetCreator is a static client-side app.
+DatasetCreator is a static client-side app and is ready for GitHub Pages.
 
 ```bash
 npm run build
 ```
 
-Deploy the generated `dist/` folder to GitHub Pages, Vercel, Netlify, or any static host.
+Pushes to `main` deploy through GitHub Actions to:
+
+```text
+https://timcixo.github.io/DatasetCreator/
+```
+
+For another static host, deploy the generated `dist/` folder.
 
 ## ⚠️ Known Limitations
 

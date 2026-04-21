@@ -1,11 +1,22 @@
 import * as Dialog from '@radix-ui/react-dialog';
 import { memo, useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { AlertCircle, ArrowRight, Settings2, X } from 'lucide-react';
+import { AlertCircle, ArrowRight, Plug, Settings2, Sparkles, X } from 'lucide-react';
 import { useProjectStore } from '../../stores/useProjectStore';
 import { useUIStore } from '../../stores/useUIStore';
+import { useLocalTaggerStore } from '../../stores/useLocalTaggerStore';
+import {
+  connectLocalTaggerBundle,
+  LocalTaggerBundleSource,
+  predictLocalTags,
+} from '../../services/tagging/localTaggerService';
 
 type PreviewMap = Record<string, string>;
 type PreviewCacheEntry = { blob: Blob; url: string };
+
+type DirectoryPickerWindow = Window &
+  typeof globalThis & {
+    showDirectoryPicker?: () => Promise<FileSystemDirectoryHandle>;
+  };
 
 const parseTagInput = (value: string): string[] =>
   value
@@ -108,13 +119,29 @@ export const TaggingStage = () => {
   const setCurrentStage = useProjectStore((state) => state.setCurrentStage);
   const taggingConfig = useProjectStore((state) => state.taggingConfig);
   const { addNotification } = useUIStore();
+  const localTagger = useLocalTaggerStore((state) => state.bundle);
+  const localTaggerStatus = useLocalTaggerStore((state) => state.status);
+  const localTaggerMessage = useLocalTaggerStore((state) => state.message);
+  const localTaggerProgress = useLocalTaggerStore((state) => state.progress);
+  const autoTaggingProgress = useLocalTaggerStore((state) => state.autoTaggingProgress);
+  const setLocalTagger = useLocalTaggerStore((state) => state.setBundle);
+  const setLocalTaggerStatus = useLocalTaggerStore((state) => state.setStatus);
+  const setLocalTaggerMessage = useLocalTaggerStore((state) => state.setMessage);
+  const setLocalTaggerProgress = useLocalTaggerStore((state) => state.setProgress);
+  const setAutoTaggingProgress = useLocalTaggerStore((state) => state.setAutoTaggingProgress);
+  const disconnectLocalTagger = useLocalTaggerStore((state) => state.disconnect);
 
   const [tagInputs, setTagInputs] = useState<Record<string, string>>({});
   const [newBlacklistTag, setNewBlacklistTag] = useState('');
   const [globalTagsToAdd, setGlobalTagsToAdd] = useState('');
   const [isSettingsOpen, setIsSettingsOpen] = useState(false);
+  const [settingsSaveMessage, setSettingsSaveMessage] = useState('');
   const [previewUrls, setPreviewUrls] = useState<PreviewMap>({});
   const previewCacheRef = useRef<Record<string, PreviewCacheEntry>>({});
+  const fallbackDirectoryInputRef = useRef<HTMLInputElement | null>(null);
+
+  const canUseDirectoryPicker =
+    typeof window !== 'undefined' && typeof (window as DirectoryPickerWindow).showDirectoryPicker === 'function';
 
   useEffect(() => {
     setPreviewUrls((previous) => {
@@ -177,6 +204,20 @@ export const TaggingStage = () => {
     };
   }, []);
 
+  useEffect(() => {
+    if (import.meta.env.DEV) {
+      console.log('[stage] current stage title rendered: Tag Images');
+      console.log(`[tagging:model] model connected state on entering Stage 7: ${localTaggerStatus}`);
+    }
+
+    return () => {
+      if (import.meta.env.DEV) {
+        console.log(`[tagging:model] model connected state before leaving Stage 7: ${useLocalTaggerStore.getState().status}`);
+        console.log('[tagging:model] Stage 7 unmounted without implicit model disconnect');
+      }
+    };
+  }, []);
+
   const summary = useMemo(() => {
     const taggedCount = items.filter((item) => (item.tags?.length ?? 0) > 0).length;
     const untaggedCount = items.length - taggedCount;
@@ -201,6 +242,17 @@ export const TaggingStage = () => {
     return { taggedCount, untaggedCount, topTags, uniqueTagCount: frequencies.size };
   }, [items]);
 
+  useEffect(() => {
+    if (import.meta.env.DEV) {
+      const keyword = taggingConfig.datasetKeyword.trim().toLowerCase();
+      const keywordInEditableTags = Boolean(
+        keyword &&
+          items.some((item) => (item.tags ?? []).some((tag) => tag.trim().toLowerCase() === keyword))
+      );
+      console.log(`[tagging] dataset keyword excluded from Stage 7 tag state: ${!keywordInEditableTags}`);
+    }
+  }, [items, taggingConfig.datasetKeyword]);
+
   const applyTagsToItem = useCallback(
     (itemId: string, rawValue: string) => {
       const parsedTags = parseTagInput(rawValue);
@@ -212,9 +264,10 @@ export const TaggingStage = () => {
       const existingTags = new Set(item.tags ?? []);
       const nextTags = [...(item.tags ?? [])];
       const skippedDuplicates: string[] = [];
+      const normalizedKeyword = taggingConfig.datasetKeyword.trim().toLowerCase();
 
       for (const tag of parsedTags) {
-        if (taggingConfig.blacklist.includes(tag) || existingTags.has(tag)) {
+        if (tag === normalizedKeyword || taggingConfig.blacklist.includes(tag) || existingTags.has(tag)) {
           if (existingTags.has(tag)) {
             skippedDuplicates.push(tag);
           }
@@ -229,6 +282,7 @@ export const TaggingStage = () => {
         console.log(`[tagging] raw input string: ${rawValue}`);
         console.log(`[tagging] parsed tag list: ${JSON.stringify(parsedTags)}`);
         console.log(`[tagging] skipped duplicate tags: ${JSON.stringify(skippedDuplicates)}`);
+        console.log('[tagging] dataset keyword insertion skipped during manual tagging');
       }
 
       if (nextTags.length !== (item.tags ?? []).length) {
@@ -237,8 +291,142 @@ export const TaggingStage = () => {
 
       setTagInputs((previous) => ({ ...previous, [itemId]: '' }));
     },
-    [items, taggingConfig.blacklist, updateDatasetItem]
+    [items, taggingConfig.blacklist, taggingConfig.datasetKeyword, updateDatasetItem]
   );
+
+  const mergeAutoTags = useCallback(
+    (existingTags: string[] = [], predictedTags: string[]) => {
+      const blacklist = new Set(taggingConfig.blacklist.map((tag) => tag.toLowerCase()));
+      const normalizedKeyword = taggingConfig.datasetKeyword.trim().toLowerCase();
+      const normalizedPredictions = predictedTags
+        .map((tag) => tag.trim().toLowerCase())
+        .filter(Boolean)
+        .filter((tag) => tag !== normalizedKeyword)
+        .filter((tag) => !blacklist.has(tag));
+      const normalizedExisting = existingTags
+        .map((tag) => tag.trim().toLowerCase())
+        .filter(Boolean)
+        .filter((tag) => tag !== normalizedKeyword)
+        .filter((tag) => !blacklist.has(tag));
+      const nextTags: string[] = [];
+      const seen = new Set<string>();
+
+      const addTag = (tag: string) => {
+        if (!tag || seen.has(tag) || blacklist.has(tag)) {
+          return;
+        }
+
+        seen.add(tag);
+        nextTags.push(tag);
+      };
+
+      if (taggingConfig.insertMode === 'prepend' || taggingConfig.insertMode === 'overwrite') {
+        normalizedPredictions.forEach(addTag);
+      }
+
+      if (taggingConfig.insertMode !== 'overwrite') {
+        normalizedExisting.forEach(addTag);
+      }
+
+      if (taggingConfig.insertMode === 'append') {
+        normalizedPredictions.forEach(addTag);
+      }
+
+      if (import.meta.env.DEV) {
+        console.log('[tagging] dataset keyword insertion skipped during auto-tagging');
+      }
+
+      return nextTags;
+    },
+    [
+      taggingConfig.blacklist,
+      taggingConfig.datasetKeyword,
+      taggingConfig.insertMode,
+    ]
+  );
+
+  const connectBundleSource = useCallback(
+    async (source: LocalTaggerBundleSource) => {
+      setLocalTaggerStatus('loading');
+      setLocalTagger(null);
+      setLocalTaggerProgress('Starting model connection...');
+      setLocalTaggerMessage('Validating local tagger bundle...');
+
+      try {
+        const connectedBundle = await connectLocalTaggerBundle(source, setLocalTaggerProgress);
+        setLocalTagger(connectedBundle);
+        setLocalTaggerStatus('ready');
+        setLocalTaggerProgress('');
+        setLocalTaggerMessage(
+          `Ready. Loaded ${connectedBundle.tags.length.toLocaleString()} tags from ${connectedBundle.name}.`
+        );
+        addNotification('success', `Local tagger ready: ${connectedBundle.name}`);
+      } catch (error) {
+        const message = error instanceof Error ? error.message : 'Model validation failed.';
+        setLocalTagger(null);
+        setLocalTaggerStatus('not-ready');
+        setLocalTaggerProgress('');
+        setLocalTaggerMessage(message);
+        addNotification('error', message);
+      }
+    },
+    [addNotification]
+  );
+
+  const handleConnectModel = useCallback(async () => {
+    if (!window.isSecureContext) {
+      setLocalTaggerStatus('not-ready');
+      setLocalTaggerMessage(
+        'Directory picker access requires a secure context. Use localhost or HTTPS, or try the folder upload fallback.'
+      );
+    }
+
+    if (canUseDirectoryPicker) {
+      try {
+        const handle = await (window as DirectoryPickerWindow).showDirectoryPicker?.();
+
+        if (!handle) {
+          return;
+        }
+
+        await connectBundleSource({ kind: 'directory', name: handle.name, handle });
+        return;
+      } catch (error) {
+        if (error instanceof DOMException && error.name === 'AbortError') {
+          setLocalTaggerMessage('Model connection canceled.');
+          return;
+        }
+
+        setLocalTaggerStatus('not-ready');
+        setLocalTaggerMessage(error instanceof Error ? error.message : 'Could not open the model folder.');
+      }
+    }
+
+    fallbackDirectoryInputRef.current?.click();
+  }, [canUseDirectoryPicker, connectBundleSource]);
+
+  const handleFallbackFolderSelected = useCallback(
+    async (files: FileList | null) => {
+      const selectedFiles = Array.from(files ?? []);
+      if (fallbackDirectoryInputRef.current) {
+        fallbackDirectoryInputRef.current.value = '';
+      }
+
+      if (selectedFiles.length === 0) {
+        setLocalTaggerMessage('Model connection canceled.');
+        return;
+      }
+
+      const firstPath = selectedFiles[0].webkitRelativePath || selectedFiles[0].name;
+      const folderName = firstPath.split('/').filter(Boolean)[0] ?? 'Local model';
+      await connectBundleSource({ kind: 'files', name: folderName, files: selectedFiles });
+    },
+    [connectBundleSource]
+  );
+
+  const handleDisconnectModel = useCallback(() => {
+    disconnectLocalTagger();
+  }, [disconnectLocalTagger]);
 
   const handleAddBlacklistTag = () => {
     const [tag] = parseTagInput(newBlacklistTag);
@@ -259,8 +447,10 @@ export const TaggingStage = () => {
   };
 
   const handleAddGlobalTags = () => {
-    const parsedTags = parseTagInput(globalTagsToAdd);
+    const normalizedKeyword = taggingConfig.datasetKeyword.trim().toLowerCase();
+    const parsedTags = parseTagInput(globalTagsToAdd).filter((tag) => tag !== normalizedKeyword);
     if (parsedTags.length === 0) {
+      addNotification('warning', 'No eligible bulk tags to add');
       return;
     }
 
@@ -283,6 +473,9 @@ export const TaggingStage = () => {
     }
 
     addNotification('success', `Added ${parsedTags.length} tag(s) across the current dataset`);
+    if (import.meta.env.DEV) {
+      console.log('[tagging] dataset keyword insertion skipped during bulk add');
+    }
     setGlobalTagsToAdd('');
   };
 
@@ -294,11 +487,91 @@ export const TaggingStage = () => {
   };
 
   const handleAutoTaggingAction = () => {
-    addNotification('info', 'Auto-tagging settings saved to working state');
     if (import.meta.env.DEV) {
-      console.log('[tagging] settings were applied to working state successfully');
+      console.log('[tagging:settings] save action triggered');
+    }
+
+    try {
+      const message = 'Local auto-tagging settings saved';
+      setSettingsSaveMessage(message);
+      addNotification('success', message);
+
+      if (import.meta.env.DEV) {
+        console.log('[tagging:settings] save success');
+        console.log('[tagging:settings] visible feedback fired');
+      }
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'Failed to save local auto-tagging settings';
+      setSettingsSaveMessage(message);
+      addNotification('error', message);
+
+      if (import.meta.env.DEV) {
+        console.log('[tagging:settings] save failure', error);
+        console.log('[tagging:settings] visible feedback fired');
+      }
     }
   };
+
+  const handleRunLocalAutoTagging = useCallback(async () => {
+    if (!localTagger || localTaggerStatus !== 'ready') {
+      setLocalTaggerStatus('not-ready');
+      setLocalTaggerMessage('Connect and validate a supported model folder before running auto-tagging.');
+      return;
+    }
+
+    setLocalTaggerStatus('running');
+    setAutoTaggingProgress({ completed: 0, total: items.length });
+
+    try {
+      let changedItemCount = 0;
+
+      for (let index = 0; index < items.length; index += 1) {
+        const item = items[index];
+        setAutoTaggingProgress({ completed: index, total: items.length });
+
+        const predictions = await predictLocalTags(
+          localTagger,
+          item.imageData,
+          taggingConfig.threshold,
+          taggingConfig.maxTags
+        );
+        const nextTags = mergeAutoTags(
+          item.tags ?? [],
+          predictions.map((prediction) => prediction.tag)
+        );
+        const previousTags = item.tags ?? [];
+        const changed =
+          nextTags.length !== previousTags.length ||
+          nextTags.some((tag, tagIndex) => previousTags[tagIndex] !== tag);
+
+        if (changed) {
+          updateDatasetItem(item.id, { tags: nextTags });
+          changedItemCount += 1;
+        }
+
+        await new Promise((resolve) => window.setTimeout(resolve, 0));
+      }
+
+      setAutoTaggingProgress({ completed: items.length, total: items.length });
+      setLocalTaggerStatus('ready');
+      setLocalTaggerMessage(`Ready. Last run updated ${changedItemCount} image(s).`);
+      addNotification('success', `Auto-tagging completed for ${items.length} image(s)`);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'Runtime inference failed.';
+      setLocalTaggerStatus('not-ready');
+      setLocalTaggerMessage(message);
+      addNotification('error', message);
+    }
+  }, [
+    addNotification,
+    items,
+    localTagger,
+    localTaggerStatus,
+    mergeAutoTags,
+    taggingConfig.maxTags,
+    taggingConfig.threshold,
+    updateDatasetItem,
+  ]);
 
   const handleRemoveTag = useCallback(
     (itemId: string, tag: string) => {
@@ -320,6 +593,9 @@ export const TaggingStage = () => {
   );
 
   const handleProceedToExport = () => {
+    if (import.meta.env.DEV) {
+      console.log(`[tagging:model] model connected state before navigating to Stage 8: ${localTaggerStatus}`);
+    }
     setCurrentStage('export');
   };
 
@@ -336,7 +612,7 @@ export const TaggingStage = () => {
     <div className="space-y-6">
       <div className="flex items-start justify-between gap-4">
         <div>
-          <h2 className="text-xl font-semibold">Auto-Tag Images</h2>
+          <h2 className="text-xl font-semibold">Tag Images</h2>
           <p className="text-sm text-muted-foreground">
             Review each image visually, inspect current tags, and add new tags with comma-separated
             input.
@@ -358,7 +634,7 @@ export const TaggingStage = () => {
                 <div>
                   <Dialog.Title className="text-lg font-semibold">Tagging Settings</Dialog.Title>
                   <Dialog.Description className="text-sm text-muted-foreground">
-                    Configure dataset-level tagging rules and bulk tagging actions.
+                    Configure export metadata, blacklist rules, and local auto-tagging behavior.
                   </Dialog.Description>
                 </div>
                 <Dialog.Close asChild>
@@ -371,6 +647,9 @@ export const TaggingStage = () => {
               <div className="space-y-5">
                 <div className="rounded-lg border border-border bg-secondary/20 p-4">
                   <h3 className="text-sm font-semibold mb-2">Dataset Keyword</h3>
+                  <p className="mb-3 text-xs text-muted-foreground">
+                    Export-only metadata. It is not inserted into editable Stage 7 tags.
+                  </p>
                   <input
                     type="text"
                     value={taggingConfig.datasetKeyword}
@@ -423,39 +702,10 @@ export const TaggingStage = () => {
                   </div>
                 </div>
 
-                <div className="rounded-lg border border-border bg-secondary/20 p-4">
-                  <h3 className="text-sm font-semibold mb-2">Add Tags to All</h3>
-                  <textarea
-                    value={globalTagsToAdd}
-                    onChange={(event) => setGlobalTagsToAdd(event.target.value)}
-                    placeholder="tag1, tag2, tag3"
-                    className="w-full px-3 py-2 rounded-md border border-border bg-background text-sm min-h-24 resize-none"
-                  />
-                  <button
-                    onClick={handleAddGlobalTags}
-                    className="mt-3 px-4 py-2 rounded-md bg-primary text-primary-foreground hover:opacity-90"
-                  >
-                    Apply to All {items.length} Images
-                  </button>
-                </div>
-
                 <div className="rounded-lg border border-border bg-secondary/20 p-4 space-y-4">
-                  <h3 className="text-sm font-semibold">Auto-Tagging Controls</h3>
+                  <h3 className="text-sm font-semibold">Local Auto-Tagging Settings</h3>
 
                   <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                    <div>
-                      <label className="block text-xs text-muted-foreground mb-2">Endpoint</label>
-                      <input
-                        type="text"
-                        value={taggingConfig.autoTaggingEndpoint ?? ''}
-                        onChange={(event) =>
-                          updateTaggingConfig({ autoTaggingEndpoint: event.target.value })
-                        }
-                        placeholder="https://..."
-                        className="w-full px-3 py-2 rounded-md border border-border bg-background text-sm"
-                      />
-                    </div>
-
                     <div>
                       <label className="block text-xs text-muted-foreground mb-2">Threshold</label>
                       <input
@@ -508,8 +758,11 @@ export const TaggingStage = () => {
                     onClick={handleAutoTaggingAction}
                     className="px-4 py-2 rounded-md bg-primary text-primary-foreground hover:opacity-90"
                   >
-                    Save Auto-Tagging Settings
+                    Save Local Auto-Tagging Settings
                   </button>
+                  {settingsSaveMessage ? (
+                    <p className="text-xs text-emerald-500">{settingsSaveMessage}</p>
+                  ) : null}
                 </div>
               </div>
             </Dialog.Content>
@@ -529,6 +782,130 @@ export const TaggingStage = () => {
         <div className="rounded-lg border border-border bg-card p-4">
           <p className="text-xs text-muted-foreground mb-1">Unique Tags</p>
           <p className="text-2xl font-bold">{summary.uniqueTagCount}</p>
+        </div>
+      </div>
+
+      <div className="rounded-lg border border-border bg-card p-4">
+        <div className="mb-3">
+          <h3 className="text-lg font-semibold">Bulk Tag Action</h3>
+          <p className="text-sm text-muted-foreground">
+            Add shared editable tags to every image in Stage 7. The dataset keyword is still applied
+            only during export.
+          </p>
+        </div>
+        <textarea
+          value={globalTagsToAdd}
+          onChange={(event) => setGlobalTagsToAdd(event.target.value)}
+          placeholder="tag1, tag2, tag3"
+          className="w-full px-3 py-2 rounded-md border border-border bg-background text-sm min-h-20 resize-none"
+        />
+        <button
+          onClick={handleAddGlobalTags}
+          className="mt-3 px-4 py-2 rounded-md bg-primary text-primary-foreground hover:opacity-90"
+        >
+          Apply to All {items.length} Images
+        </button>
+      </div>
+
+      <input
+        ref={(node) => {
+          fallbackDirectoryInputRef.current = node;
+          node?.setAttribute('webkitdirectory', '');
+          node?.setAttribute('directory', '');
+        }}
+        type="file"
+        multiple
+        className="hidden"
+        onChange={(event) => void handleFallbackFolderSelected(event.target.files)}
+        aria-hidden="true"
+      />
+
+      <div className="rounded-lg border border-border bg-card p-4">
+        <div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
+          <div className="space-y-2">
+            <div className="flex flex-wrap items-center gap-2">
+              <h3 className="text-lg font-semibold">
+                Local tagger:{' '}
+                {localTaggerStatus === 'ready' || localTaggerStatus === 'running'
+                  ? localTagger?.name ?? 'Ready'
+                  : localTaggerStatus === 'not-ready'
+                    ? 'Not ready'
+                    : 'Not connected'}
+              </h3>
+              {localTaggerStatus === 'ready' ? (
+                <span className="rounded-full bg-emerald-500/15 px-2 py-1 text-xs text-emerald-500">
+                  Ready
+                </span>
+              ) : null}
+              {localTaggerStatus === 'running' ? (
+                <span className="rounded-full bg-primary/15 px-2 py-1 text-xs text-primary">
+                  Running
+                </span>
+              ) : null}
+              {localTaggerStatus === 'not-ready' ? (
+                <span className="rounded-full bg-destructive/15 px-2 py-1 text-xs text-destructive">
+                  Not ready
+                </span>
+              ) : null}
+            </div>
+
+            <p className="text-sm text-muted-foreground">{localTaggerMessage}</p>
+            {localTaggerProgress ? (
+              <p className="text-xs text-muted-foreground">{localTaggerProgress}</p>
+            ) : null}
+            {localTagger ? (
+              <p className="text-xs text-muted-foreground">
+                Runtime: {localTagger.runtime.toUpperCase()} | Tags:{' '}
+                {localTagger.tags.length.toLocaleString()} | Input:{' '}
+                {localTagger.inputWidth}x{localTagger.inputHeight} {localTagger.layout.toUpperCase()}
+              </p>
+            ) : null}
+            {!canUseDirectoryPicker ? (
+              <p className="text-xs text-muted-foreground">
+                This browser does not expose the directory picker API. The folder upload fallback is
+                used when supported, and access must be granted again after reload.
+              </p>
+            ) : null}
+            {localTaggerStatus === 'running' ? (
+              <p className="text-xs text-muted-foreground">
+                Auto-tagging {autoTaggingProgress.completed} of {autoTaggingProgress.total} images...
+              </p>
+            ) : null}
+          </div>
+
+          <div className="flex flex-wrap gap-2">
+            {localTagger ? (
+              <button
+                type="button"
+                onClick={handleDisconnectModel}
+                disabled={localTaggerStatus === 'running'}
+                className="inline-flex items-center gap-2 rounded-md bg-secondary px-4 py-2 text-sm transition-colors hover:bg-muted disabled:cursor-not-allowed disabled:opacity-60"
+              >
+                <X size={16} />
+                Disconnect model
+              </button>
+            ) : (
+              <button
+                type="button"
+                onClick={() => void handleConnectModel()}
+                disabled={localTaggerStatus === 'loading' || localTaggerStatus === 'running'}
+                className="inline-flex items-center gap-2 rounded-md bg-secondary px-4 py-2 text-sm transition-colors hover:bg-muted disabled:cursor-not-allowed disabled:opacity-60"
+              >
+                <Plug size={16} />
+                Connect model
+              </button>
+            )}
+
+            <button
+              type="button"
+              onClick={() => void handleRunLocalAutoTagging()}
+              disabled={!localTagger || localTaggerStatus !== 'ready'}
+              className="inline-flex items-center gap-2 rounded-md bg-primary px-4 py-2 text-sm text-primary-foreground transition-opacity hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-50"
+            >
+              <Sparkles size={16} />
+              Run auto-tagging
+            </button>
+          </div>
         </div>
       </div>
 

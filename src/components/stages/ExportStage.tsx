@@ -1,6 +1,7 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { useProjectStore } from '../../stores/useProjectStore';
 import { useUIStore } from '../../stores/useUIStore';
+import { useLocalTaggerStore } from '../../stores/useLocalTaggerStore';
 import {
   exportAsZip,
   downloadZipFile,
@@ -11,12 +12,20 @@ import { AlertCircle, Download, FolderOpen } from 'lucide-react';
 export const ExportStage = () => {
   const { getDatasetItems, taggingConfig } = useProjectStore();
   const { addNotification } = useUIStore();
+  const localTaggerStatus = useLocalTaggerStore((state) => state.status);
 
   const [isExporting, setIsExporting] = useState(false);
   const [exportMethod, setExportMethod] = useState<'zip' | 'directory'>('zip');
 
   const items = getDatasetItems(false);
   const totalSize = items.reduce((sum, item) => sum + item.imageData.size, 0);
+
+  useEffect(() => {
+    if (import.meta.env.DEV) {
+      console.log(`[tagging:model] model connected state on entering Stage 8: ${localTaggerStatus}`);
+      console.log('[export] dataset keyword is added only during export rendering/output');
+    }
+  }, [localTaggerStatus]);
 
   const handleExport = async () => {
     if (items.length === 0) {

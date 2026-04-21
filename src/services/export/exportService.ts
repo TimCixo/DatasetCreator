@@ -23,8 +23,25 @@ export const generateTagString = (
   let tags = [keyword];
 
   if (item.tags) {
-    const filtered = item.tags.filter((t) => !blacklist.includes(t.toLowerCase()));
+    const seen = new Set(tags);
+    const normalizedBlacklist = new Set(blacklist.map((tag) => tag.toLowerCase()));
+    const filtered = item.tags
+      .map((tag) => tag.toLowerCase())
+      .filter((tag) => tag !== keyword)
+      .filter((tag) => !normalizedBlacklist.has(tag))
+      .filter((tag) => {
+        if (seen.has(tag)) {
+          return false;
+        }
+        seen.add(tag);
+        return true;
+      });
     tags.push(...filtered);
+  }
+
+  if (import.meta.env.DEV) {
+    console.log('[export] dataset keyword inserted at export time only');
+    console.log(`[export] editable tags excluded duplicate dataset keyword: ${item.tags?.includes(keyword) ?? false}`);
   }
 
   return tags.join(', ');

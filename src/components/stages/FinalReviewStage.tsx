@@ -814,7 +814,7 @@ export const FinalReviewStage = () => {
                   ? 'Showing only the selected similar pair.'
                   : activeSimilarityView === 'clusters' && selectedClusterId
                     ? 'Showing only the selected similarity cluster.'
-                    : 'Final check before moving to auto-tagging.'}
+                    : 'Final check before moving to tagging.'}
               </p>
             </div>
           </div>
@@ -851,7 +851,7 @@ export const FinalReviewStage = () => {
           onClick={handleProceedToTagging}
           className="inline-flex items-center gap-2 px-6 py-3 bg-primary text-primary-foreground rounded-md hover:opacity-90 transition-opacity font-medium"
         >
-          Proceed to Auto-Tag Images
+          Proceed to Tag Images
           <ArrowRight size={16} />
         </button>
       </div>

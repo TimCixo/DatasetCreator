@@ -17,7 +17,7 @@ export const STAGE_LABELS: Record<string, string> = {
   crop: 'Crop Images',
   augment: 'Augment Dataset',
   review: 'Final Review',
-  tagging: 'Auto-Tag Images',
+  tagging: 'Tag Images',
   export: 'Export Dataset',
 };
 
